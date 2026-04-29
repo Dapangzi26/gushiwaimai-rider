@@ -1,0 +1,97 @@
+
+.page[data-v-b1eca758] {
+  min-height: 100vh;
+  background: #f5f5f5;
+  padding: 0.75rem;
+  box-sizing: border-box;
+}
+.page-header[data-v-b1eca758] {
+  background: #ffffff;
+  border-radius: 0.625rem;
+  padding: 0.875rem 0.75rem;
+  margin-bottom: 0.625rem;
+}
+.page-title[data-v-b1eca758] {
+  display: block;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: #333333;
+}
+.page-tip[data-v-b1eca758] {
+  display: block;
+  margin-top: 0.3125rem;
+  font-size: 0.75rem;
+  color: #999999;
+}
+.state-wrap[data-v-b1eca758] {
+  padding: 5.625rem 0;
+  text-align: center;
+}
+.state-text[data-v-b1eca758] {
+  font-size: 0.875rem;
+  color: #999999;
+}
+.conversation-list[data-v-b1eca758] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+.conversation-card[data-v-b1eca758] {
+  background: #ffffff;
+  border-radius: 0.625rem;
+  padding: 0.75rem;
+  box-shadow: 0 0.1875rem 0.625rem rgba(0, 0, 0, 0.04);
+}
+.conversation-top[data-v-b1eca758],
+.conversation-bottom[data-v-b1eca758] {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.625rem;
+}
+.conversation-bottom[data-v-b1eca758] {
+  margin-top: 0.5rem;
+}
+.conversation-meta[data-v-b1eca758] {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+.user-name[data-v-b1eca758] {
+  font-size: 0.9375rem;
+  color: #333333;
+  font-weight: 600;
+}
+.town-name[data-v-b1eca758] {
+  font-size: 0.6875rem;
+  color: #1f6f43;
+  background: rgba(31, 111, 67, 0.12);
+  padding: 0.125rem 0.375rem;
+  border-radius: 31.21875rem;
+}
+.time-text[data-v-b1eca758] {
+  font-size: 0.6875rem;
+  color: #999999;
+  flex-shrink: 0;
+}
+.preview-text[data-v-b1eca758] {
+  flex: 1;
+  font-size: 0.8125rem;
+  color: #666666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unread-badge[data-v-b1eca758] {
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.3125rem;
+  line-height: 1.125rem;
+  text-align: center;
+  border-radius: 31.21875rem;
+  background: #ff4d4f;
+  color: #ffffff;
+  font-size: 0.6875rem;
+  flex-shrink: 0;
+}

@@ -1,17 +1,17 @@
 {
 	"pages": [
 		{
-			"path": "pages/index/index",
+			"path": "pages/login/index",
 			"style": {
-				"navigationBarTitleText": "骑手工作台",
+				"navigationBarTitleText": "登录注册",
 				"navigationBarBackgroundColor": "#1890FF",
 				"navigationBarTextStyle": "white"
 			}
 		},
 		{
-			"path": "pages/test/index",
+			"path": "pages/index/index",
 			"style": {
-				"navigationBarTitleText": "测试页面",
+				"navigationBarTitleText": "骑手工作台",
 				"navigationBarBackgroundColor": "#1890FF",
 				"navigationBarTextStyle": "white"
 			}
@@ -29,6 +29,14 @@
 			"path": "pages/orders/detail",
 			"style": {
 				"navigationBarTitleText": "订单详情",
+				"navigationBarBackgroundColor": "#1890FF",
+				"navigationBarTextStyle": "white"
+			}
+		},
+		{
+			"path": "pages/map/nav",
+			"style": {
+				"navigationBarTitleText": "地图导航",
 				"navigationBarBackgroundColor": "#1890FF",
 				"navigationBarTextStyle": "white"
 			}
@@ -59,6 +67,23 @@
 			}
 		},
 		{
+			"path": "pages/station-messages/index",
+			"style": {
+				"navigationBarTitleText": "跑腿代购消息",
+				"navigationBarBackgroundColor": "#1890FF",
+				"navigationBarTextStyle": "white",
+				"enablePullDownRefresh": true
+			}
+		},
+		{
+			"path": "pages/station-messages/detail",
+			"style": {
+				"navigationBarTitleText": "会话详情",
+				"navigationBarBackgroundColor": "#1890FF",
+				"navigationBarTextStyle": "white"
+			}
+		},
+		{
 			"path": "pages/profile/index",
 			"style": {
 				"navigationBarTitleText": "个人中心",
@@ -67,9 +92,17 @@
 			}
 		},
 		{
-			"path": "pages/login/index",
+			"path": "pages/test/index",
 			"style": {
-				"navigationBarTitleText": "登录注册",
+				"navigationBarTitleText": "测试页面",
+				"navigationBarBackgroundColor": "#1890FF",
+				"navigationBarTextStyle": "white"
+			}
+		},
+		{
+			"path": "pages/test-nav/test-nav",
+			"style": {
+				"navigationBarTitleText": "导航沙盒测试",
 				"navigationBarBackgroundColor": "#1890FF",
 				"navigationBarTextStyle": "white"
 			}
