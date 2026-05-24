@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <!-- 驾车路线规划示例按钮 -->
+    <Button
+        android:id="@+id/btn_send"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="驾车路线规划示例"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- 步行路线规划示例按钮 -->
+    <Button
+        android:id="@+id/btn_walking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="步行路线规划示例"
+        android:layout_marginBottom="10dp"/>
+
+    <!-- 骑行路线规划按钮 -->
+    <Button
+        android:id="@+id/btn_biking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="骑行路线规划示例"
+        android:layout_marginBottom="10dp"/>
+
+    <!-- 公交路线规划按钮 -->
+    <Button
+        android:id="@+id/btn_bus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="公交路线规划示例"
+        android:layout_marginBottom="10dp"/>
+
+    <!-- 结果展示区域 - 使用ScrollView包裹实现滚动 -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:scrollbars="vertical">
+
+        <!-- 添加水平滚动条以确保长文本不会超出屏幕 -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="horizontal">
+
+            <!-- 实际显示结果的TextView -->
+            <TextView
+                android:id="@+id/tv_result"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="#f0f0f0"
+                android:padding="16dp"
+                android:text="请点击上方按钮查看示例"
+                android:textSize="14sp"/>
+        </HorizontalScrollView>
+    </ScrollView>
+</LinearLayout>

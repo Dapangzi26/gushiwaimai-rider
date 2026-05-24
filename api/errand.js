@@ -6,8 +6,8 @@ import { get, post } from '@/utils/request.js'
 /**
  * 获取跑腿订单列表
  */
-export function getErrandList(params = {}) {
-  return get('/order/errand/list', params)
+export function getErrandList(params = {}, options = {}) {
+  return get('/order/errand/list', params, options)
 }
 
 /**

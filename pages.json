@@ -1,136 +1,186 @@
 {
+	// ==================== 页面列表 ====================
+	// 这是APP所有页面的注册清单，每个页面在这里配置路径和外观
 	"pages": [
+		// ==================== 登录页 ====================
 		{
-			"path": "pages/login/index",
+			"path": "pages/login/index",           // 页面文件路径：打开 pages/login/index.vue
 			"style": {
-				"navigationBarTitleText": "登录注册",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "登录注册",              // 顶部导航栏显示的文字标题
+				"navigationBarBackgroundColor": "#1890FF",         // 顶部导航栏背景颜色：蓝色
+				"navigationBarTextStyle": "white"                  // 导航栏文字颜色：白色
 			}
 		},
+		// ==================== 骑手工作台（首页） ====================
 		{
-			"path": "pages/index/index",
+			"path": "pages/index/index",            // 页面文件路径：打开 pages/index/index.vue
 			"style": {
-				"navigationBarTitleText": "骑手工作台",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "骑手工作台",           // 顶部标题：骑手工作台
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white"                  // 白色文字
 			}
 		},
+		// ==================== 外卖配送订单列表 ====================
 		{
-			"path": "pages/orders/index",
+			"path": "pages/orders/index",           // 页面文件路径：打开 pages/orders/index.vue
 			"style": {
-				"navigationBarTitleText": "外卖配送",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white",
-				"enablePullDownRefresh": true
+				"navigationBarTitleText": "外卖配送",             // 顶部标题：外卖配送
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white",                 // 白色文字
+				"enablePullDownRefresh": true                      // 允许用户向下拉刷新订单列表
 			}
 		},
+		// ==================== 订单详情页 ====================
 		{
-			"path": "pages/orders/detail",
+			"path": "pages/orders/detail",          // 页面文件路径：打开 pages/orders/detail.vue
 			"style": {
-				"navigationBarTitleText": "订单详情",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "订单详情",             // 顶部标题：订单详情
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white"                  // 白色文字
 			}
 		},
+		// ==================== 地图导航页 ====================
 		{
-			"path": "pages/map/nav",
+			"path": "pages/map/nav",                // 页面文件路径：打开 pages/map/nav.vue
 			"style": {
-				"navigationBarTitleText": "地图导航",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationStyle": "custom",                        // 使用自定义导航栏（因为导航页需要全屏地图）
+				"app-plus": {
+					"titleNView": false                             // 在安卓/iOS上隐藏默认的标题栏，让地图占满屏幕
+				}
 			}
 		},
+		// ==================== 跑腿订单列表 ====================
 		{
-			"path": "pages/errands/index",
+			"path": "pages/errands/index",          // 页面文件路径：打开 pages/errands/index.vue
 			"style": {
-				"navigationBarTitleText": "跑腿订单",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white",
-				"enablePullDownRefresh": true
+				"navigationBarTitleText": "跑腿订单",             // 顶部标题：跑腿订单
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white",                 // 白色文字
+				"enablePullDownRefresh": true                      // 允许下拉刷新跑腿订单列表
 			}
 		},
+		// ==================== 跑腿订单详情页 ====================
 		{
-			"path": "pages/errands/detail",
+			"path": "pages/errands/detail",         // 页面文件路径：打开 pages/errands/detail.vue
 			"style": {
-				"navigationBarTitleText": "跑腿订单详情",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "跑腿订单详情",         // 顶部标题：跑腿订单详情
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white"                  // 白色文字
 			}
 		},
+		// ==================== 今日订单汇总页 ====================
 		{
-			"path": "pages/earnings/index",
+			"path": "pages/today-orders/index",     // 页面文件路径：打开 pages/today-orders/index.vue
 			"style": {
-				"navigationBarTitleText": "收入明细",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "今日订单",             // 顶部标题：今日订单
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white",                 // 白色文字
+				"enablePullDownRefresh": true                      // 允许下拉刷新今日订单列表
 			}
 		},
+		// ==================== 跑腿代购消息列表 ====================
 		{
-			"path": "pages/station-messages/index",
+			"path": "pages/station-messages/index",  // 页面文件路径：打开 pages/station-messages/index.vue
 			"style": {
-				"navigationBarTitleText": "跑腿代购消息",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white",
-				"enablePullDownRefresh": true
+				"navigationBarTitleText": "跑腿代购消息",         // 顶部标题：跑腿代购消息
+				"navigationBarBackgroundColor": "#1890FF",         // 蓝色背景
+				"navigationBarTextStyle": "white",                 // 白色文字
+				"enablePullDownRefresh": true                      // 允许下拉刷新消息列表
 			}
 		},
+		// ==================== 会话详情页（聊天页面） ====================
 		{
-			"path": "pages/station-messages/detail",
+			"path": "pages/station-messages/detail", // 页面文件路径：打开 pages/station-messages/detail.vue
 			"style": {
-				"navigationBarTitleText": "会话详情",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "会话详情",            // 顶部标题：会话详情
+				"navigationBarBackgroundColor": "#1890FF",        // 蓝色背景
+				"navigationBarTextStyle": "white"                 // 白色文字
 			}
 		},
+		// ==================== 商家入驻审核列表 ====================
 		{
-			"path": "pages/profile/index",
+			"path": "pages/merchant-audit/index",    // 页面文件路径：打开 pages/merchant-audit/index.vue
 			"style": {
-				"navigationBarTitleText": "个人中心",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "商家入驻审核",       // 顶部标题：商家入驻审核
+				"navigationBarBackgroundColor": "#1890FF",        // 蓝色背景
+				"navigationBarTextStyle": "white",                // 白色文字
+				"enablePullDownRefresh": true                     // 允许下拉刷新审核列表
 			}
 		},
+		// ==================== 商家入驻申请详情 ====================
 		{
-			"path": "pages/test/index",
+			"path": "pages/merchant-audit/detail",    // 页面文件路径：打开 pages/merchant-audit/detail.vue
 			"style": {
-				"navigationBarTitleText": "测试页面",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "申请详情",           // 顶部标题：申请详情
+				"navigationBarBackgroundColor": "#1890FF",        // 蓝色背景
+				"navigationBarTextStyle": "white"                 // 白色文字
 			}
 		},
+		// ==================== 骑手审核列表 ====================
 		{
-			"path": "pages/test-nav/test-nav",
+			"path": "pages/rider-audit/index",       // 页面文件路径：打开 pages/rider-audit/index.vue
 			"style": {
-				"navigationBarTitleText": "导航沙盒测试",
-				"navigationBarBackgroundColor": "#1890FF",
-				"navigationBarTextStyle": "white"
+				"navigationBarTitleText": "骑手审核",           // 顶部标题：骑手审核
+				"navigationBarBackgroundColor": "#1890FF",       // 蓝色背景
+				"navigationBarTextStyle": "white",               // 白色文字
+				"enablePullDownRefresh": true                    // 允许下拉刷新审核列表
+			}
+		},
+		// ==================== 骑手审核详情 ====================
+		{
+			"path": "pages/rider-audit/detail",      // 页面文件路径：打开 pages/rider-audit/detail.vue
+			"style": {
+				"navigationBarTitleText": "申请详情",           // 顶部标题：申请详情
+				"navigationBarBackgroundColor": "#1890FF",       // 蓝色背景
+				"navigationBarTextStyle": "white"                // 白色文字
+			}
+		},
+		// ==================== 个人中心页 ====================
+		{
+			"path": "pages/profile/index",            // 页面文件路径：打开 pages/profile/index.vue
+			"style": {
+				"navigationBarTitleText": "个人中心",           // 顶部标题：个人中心
+				"navigationBarBackgroundColor": "#1890FF",        // 蓝色背景
+				"navigationBarTextStyle": "white"                 // 白色文字
+			}
+		},
+		// ==================== 提醒设置页 ====================
+		{
+			"path": "pages/reminder-settings/index",   // 页面文件路径：打开 pages/reminder-settings/index.vue
+			"style": {
+				"navigationBarTitleText": "提醒设置",           // 顶部标题：提醒设置
+				"navigationBarBackgroundColor": "#1890FF",       // 蓝色背景
+				"navigationBarTextStyle": "white"                // 白色文字
 			}
 		}
 	],
+	// ==================== 全局样式配置 ====================
+	// 所有页面默认的外观设置（如果某个页面没单独设置，就用这里的）
 	"globalStyle": {
-		"navigationBarTitleText": "固始县外卖骑手端",
-		"navigationBarTextStyle": "white",
-		"navigationBarBackgroundColor": "#1890FF",
-		"backgroundColor": "#F5F5F5"
+		"navigationBarTitleText": "固始县外卖骑手端",      // 默认的导航栏标题
+		"navigationBarTextStyle": "white",                   // 默认导航栏文字颜色：白色
+		"navigationBarBackgroundColor": "#1890FF",            // 默认导航栏背景色：蓝色
+		"backgroundColor": "#F5F5F5"                         // 页面整体背景色：浅灰色
 	},
+	// ==================== 底部导航栏（TabBar）====================
+	// APP底部固定的两个切换按钮
 	"tabBar": {
-		"color": "#999999",
-		"selectedColor": "#1890FF",
-		"borderStyle": "black",
-		"backgroundColor": "#ffffff",
+		"color": "#999999",                    // 未选中时的文字颜色：灰色
+		"selectedColor": "#1890FF",            // 选中时的文字颜色：蓝色
+		"borderStyle": "black",                // 顶部边框样式
+		"backgroundColor": "#ffffff",          // 底部导航栏背景色：白色
+		"fontSize": "16px",                    // 文字大小
+		"iconWidth": "28px",                   // 图标宽度
+		"spacing": "6px",                      // 图标与文字的间距
+		"height": "62px",                      // 导航栏高度
 		"list": [
 			{
-				"pagePath": "pages/index/index",
-				"text": "📱 工作台"
+				"pagePath": "pages/index/index",    // 点击后跳转到的页面：骑手工作台
+				"text": "📱 工作台"                    // 显示的文字标签
 			},
 			{
-				"pagePath": "pages/orders/index",
-				"text": "📋 订单"
-			},
-			{
-				"pagePath": "pages/profile/index",
-				"text": "👤 我的"
+				"pagePath": "pages/profile/index",    // 点击后跳转到的页面：个人中心
+				"text": "👤 我的"                       // 显示的文字标签
 			}
 		]
 	}

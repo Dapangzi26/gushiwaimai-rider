@@ -6,8 +6,8 @@ import { get, put, post } from '@/utils/request.js'
 /**
  * 获取用户信息（使用 /auth/me 接口）
  */
-export function getUserInfo() {
-  return get('/auth/me')
+export function getUserInfo(options = {}) {
+  return get('/auth/me', {}, options)
 }
 
 /**

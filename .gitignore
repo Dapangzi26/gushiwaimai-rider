@@ -1,0 +1,34 @@
+#
+# 这个文件是 Git 忽略规则，专门拦截不该提交到仓库的本地依赖、临时产物和调试垃圾文件。
+# 这里尽量只忽略“明显不是业务代码”的内容，避免把真正需要同步的源码挡掉。
+#
+
+# 前端依赖目录，安装后可重新生成，不需要进仓库
+node_modules/
+
+# 本地调试目录和日志
+.dbg/
+*.log
+git-log.txt
+
+# 压缩包和临时解压目录，这些都是本地下载/排查时留下的文件
+*.zip
+tmp_core_inspect/
+tmp_tts_inspect/
+tmpuni/
+
+# 本地 Android SDK 目录，不属于项目源码
+android-sdk/
+Android-SDK@5.07.82603_20260414/
+
+# 签名文件和根目录下单独放的 SDK 二进制，属于敏感或本地依赖资源
+*.keystore
+/android-mapsdk-v1.0.477.aar
+
+# HBuilder/uni-app 的调试与构建产物，避免把本地编译垃圾继续塞进仓库
+unpackage/debug/
+unpackage/dist/build/
+unpackage/resources/
+
+# 本地误生成的异常文件名，不属于正常业务文件
+mapnav.vue''*

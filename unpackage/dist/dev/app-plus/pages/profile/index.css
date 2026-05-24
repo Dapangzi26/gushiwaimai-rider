@@ -90,6 +90,9 @@
 .menu-item[data-v-201c0da5]:last-child {
   border-bottom: none;
 }
+.menu-item.readonly-item[data-v-201c0da5] {
+  cursor: default;
+}
 .menu-icon[data-v-201c0da5] {
   font-size: 1.25rem;
   margin-right: 0.625rem;
@@ -104,6 +107,9 @@
   color: #FF6B35;
   font-weight: bold;
   margin-right: 0.5rem;
+}
+.reminder-value[data-v-201c0da5] {
+  color: #1890ff;
 }
 .menu-arrow[data-v-201c0da5] {
   font-size: 1rem;

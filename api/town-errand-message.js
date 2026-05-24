@@ -3,14 +3,14 @@
  */
 import { get, post } from '@/utils/request.js'
 
-export function getTownErrandConversations(params = {}) {
-  return get('/town-errand/conversations', params)
+export function getTownErrandConversations(params = {}, options = {}) {
+  return get('/town-errand/conversations', params, options)
 }
 
-export function getTownErrandMessages(conversationId, params = {}) {
-  return get(`/town-errand/conversations/${conversationId}/messages`, params)
+export function getTownErrandMessages(conversationId, params = {}, options = {}) {
+  return get(`/town-errand/conversations/${conversationId}/messages`, params, options)
 }
 
-export function sendTownErrandMessage(conversationId, content) {
-  return post(`/town-errand/conversations/${conversationId}/messages`, { content })
+export function sendTownErrandMessage(conversationId, content, options = {}) {
+  return post(`/town-errand/conversations/${conversationId}/messages`, { content }, options)
 }

@@ -1,0 +1,38 @@
+{
+  "name": "腾讯原生导航测试插件",
+  "id": "TencentNaviModule",
+  "version": "1.0.0",
+  "description": "骑手端腾讯原生骑行导航插件",
+  "_dp_type": "nativeplugin",
+  "_dp_nativeplugin": {
+    "android": {
+      "plugins": [
+        {
+          "type": "module",
+          "name": "TencentNaviModule",
+          "class": "io.dcloud.uniplugin.tencentnavi.TencentNaviModule"
+        }
+      ],
+      "integrateType": "aar",
+      "libs": [
+        "TencentNaviModule-release.aar"
+      ],
+      "dependencies": [
+        "com.alibaba:fastjson:1.2.83",
+        "androidx.constraintlayout:constraintlayout:2.1.4",
+        "com.tencent.openmap:foundation:0.9.0.e5ea763-lite",
+        "com.tencent.map:tencent-map-nav-sdk-core:7.6.0",
+        "com.tencent.map:tencent-map-nav-sdk-tts:7.6.0"
+      ],
+      "compileOptions": {
+        "sourceCompatibility": "1.8",
+        "targetCompatibility": "1.8"
+      },
+      "abis": [
+        "armeabi-v7a",
+        "arm64-v8a"
+      ],
+      "minSdkVersion": "24"
+    }
+  }
+}

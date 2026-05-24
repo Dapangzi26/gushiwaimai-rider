@@ -11,38 +11,27 @@
     </view>
 
     <view class="menu-list">
-      <view class="menu-item" @click="showTip('账户余额')">
+      <view class="menu-item readonly-item">
         <text class="menu-icon">💰</text>
         <text class="menu-text">账户余额</text>
         <text class="menu-value">¥{{ balance }}</text>
+      </view>
+      <view class="menu-item" @click="goReminderSettings">
+        <text class="menu-icon">🔔</text>
+        <text class="menu-text">提醒设置</text>
+        <text class="menu-value reminder-value">{{ reminderStatusText }}</text>
         <text class="menu-arrow">›</text>
       </view>
       <view v-if="isTownStationRole" class="menu-item" @click="showStationPanel = !showStationPanel">
-        <text class="menu-icon">📍</text>
-        <text class="menu-text">站长乡镇</text>
-        <text class="menu-value">{{ userInfo.rider_town || '未绑定' }}</text>
-        <text class="menu-arrow">›</text>
-      </view>
-      <view v-else class="menu-item" @click="showTip('配送范围')">
         <text class="menu-icon">📍</text>
         <text class="menu-text">配送范围</text>
         <text class="menu-value">{{ deliveryScopeLabel }}</text>
         <text class="menu-arrow">›</text>
       </view>
-      <view class="menu-item" @click="showTip('修改密码')">
-        <text class="menu-icon">🔒</text>
-        <text class="menu-text">修改密码</text>
-        <text class="menu-arrow">›</text>
-      </view>
-      <view class="menu-item" @click="showTip('联系客服')">
-        <text class="menu-icon">📞</text>
-        <text class="menu-text">联系客服</text>
-        <text class="menu-arrow">›</text>
-      </view>
-      <view class="menu-item" @click="showTip('关于我们')">
-        <text class="menu-icon">ℹ️</text>
-        <text class="menu-text">关于我们</text>
-        <text class="menu-arrow">›</text>
+      <view v-else class="menu-item readonly-item">
+        <text class="menu-icon">📍</text>
+        <text class="menu-text">配送范围</text>
+        <text class="menu-value">{{ deliveryScopeLabel }}</text>
       </view>
     </view>
 
@@ -63,6 +52,8 @@
 
 <script>
 import { getUserInfo, bindStationTown } from '@/api/user.js'
+import { getReminderSettings } from '@/utils/reminder-settings.js'
+import { isMerchantDeliveryUser, isTownStationmaster } from '@/utils/rider-auth.js'
 import { getUserInfo as getStoredUserInfo, removeToken, removeUserInfo } from '@/utils/storage.js'
 
 export default {
@@ -71,19 +62,47 @@ export default {
       userInfo: {},
       balance: '0.00',
       showStationPanel: false,
-      stationTown: ''
+      stationTown: '',
+      reminderSettings: getReminderSettings()
     }
   },
   computed: {
     isTownStationRole() {
-      return this.userInfo.rider_kind === 'stationmaster' || this.userInfo.delivery_scope === 'town_delivery'
+      return isTownStationmaster(this.userInfo)
     },
     deliveryScopeLabel() {
-      return this.userInfo.delivery_scope === 'county_delivery' ? '县城配送' : '骑手配送'
+      const townName = String(
+        this.userInfo.rider_town
+        || this.userInfo.town_name
+        || this.userInfo.customer_town
+        || ''
+      ).trim()
+      const riderKind = String(this.userInfo.rider_kind || '').trim()
+      const deliveryScope = String(this.userInfo.delivery_scope || '').trim()
+
+      if (deliveryScope === 'county_delivery') {
+        return '县城骑手'
+      }
+      if (deliveryScope === 'town_delivery') {
+        if (riderKind === 'stationmaster') {
+          return townName ? `${townName}站长` : '乡镇站长'
+        }
+        return townName ? `${townName}骑手` : '乡镇骑手'
+      }
+      if (isMerchantDeliveryUser(this.userInfo)) {
+        return townName ? `${townName}商家自配送员` : '商家自配送员'
+      }
+      return townName || '未绑定'
+    },
+    reminderStatusText() {
+      return this.reminderSettings.enabled ? '已开启' : '已关闭'
     }
   },
   onLoad() {
     this.loadUserInfo()
+  },
+  onShow() {
+    this.reminderSettings = getReminderSettings()
   },
   methods: {
     async loadUserInfo() {
@@ -98,6 +117,9 @@ export default {
           this.userInfo = res.data
           this.balance = res.data.rider_balance || '0.00'
           this.stationTown = res.data.rider_town || ''
+          if (!this.isTownStationRole) {
+            this.showStationPanel = false
+          }
         }
       } catch (e) {
         console.error('加载用户信息失败', e)
@@ -105,6 +127,11 @@ export default {
     },
 
     async bindTown() {
+      if (!this.isTownStationRole) {
+        this.showStationPanel = false
+        uni.showToast({ title: '仅乡镇站长可绑定', icon: 'none' })
+        return
+      }
       const town = String(this.stationTown || '').trim()
       if (!town) {
         uni.showToast({ title: '请填写乡镇名称', icon: 'none' })
@@ -118,9 +145,8 @@ export default {
         console.error('绑定失败', e)
       }
     },
-    
-    showTip(name) {
-      uni.showToast({ title: name + '功能开发中', icon: 'none' })
+    goReminderSettings() {
+      uni.navigateTo({ url: '/pages/reminder-settings/index' })
     },
     
     handleLogout() {
@@ -248,6 +274,10 @@ export default {
   border-bottom: none;
 }
 
+.menu-item.readonly-item {
+  cursor: default;
+}
+
 .menu-icon {
   font-size: 40rpx;
   margin-right: 20rpx;
@@ -264,6 +294,10 @@ export default {
   color: #FF6B35;
   font-weight: bold;
   margin-right: 16rpx;
+}
+
+.reminder-value {
+  color: #1890ff;
 }
 
 .menu-arrow {

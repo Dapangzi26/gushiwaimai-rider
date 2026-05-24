@@ -11,1009 +11,903 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #0b1420;
       }
-      #mapWrapper {
+      #app {
         width: 100%;
         height: 100%;
-        overflow: hidden;
         position: relative;
+        overflow: hidden;
+        background: #0b1420;
       }
-      #mapDiv {
-        width: 150%;
-        height: 150%;
-        position: absolute;
-        left: -25%;
-        top: -25%;
-        transform-origin: center center;
-        transition: transform 0.5s ease-out;
+      #mapImage {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        background: #dfe7f5;
+        transform: scale(1.03);
       }
-      #tip {
-        position: fixed;
-        left: 12px;
-        top: 12px;
-        z-index: 1002;
-        background: rgba(0, 0, 0, 0.55);
-        color: #fff;
-        padding: 8px 10px;
-        border-radius: 10px;
-        font-size: 12px;
-        max-width: calc(100% - 24px);
-        box-sizing: border-box;
-      }
-      #gestureLayer {
+      #loadingMask {
         position: absolute;
         inset: 0;
-        z-index: 1000;
-        touch-action: none;
-        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(7, 14, 24, 0.86);
+        color: #fff;
+        font-size: 15px;
+        z-index: 20;
+      }
+      #topCard {
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        top: 12px;
+        z-index: 11;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(10, 17, 30, 0.92);
+        color: #fff;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+      }
+      #topRow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      #turnIcon {
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #1677ff, #4fb3ff);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        font-weight: 700;
+        flex-shrink: 0;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+      }
+      #topText {
+        min-width: 0;
+        flex: 1;
+      }
+      #turnPrimary {
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #turnSecondary {
+        margin-top: 6px;
+        color: rgba(255, 255, 255, 0.76);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #summaryRow {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .summary-pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.88);
+        font-size: 12px;
+      }
+      #modeChip {
+        position: absolute;
+        left: 12px;
+        top: 144px;
+        z-index: 11;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(10, 17, 30, 0.86);
+        color: #fff;
+        font-size: 12px;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+      }
+      #tip {
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        top: 184px;
+        z-index: 12;
+        display: none;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(0, 0, 0, 0.66);
+        color: #fff;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      #carAnchor {
+        position: absolute;
+        left: 50%;
+        bottom: 192px;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
         pointer-events: none;
       }
-      #followBtn {
+      #carHalo {
+        width: 82px;
+        height: 82px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(24, 144, 255, 0.24) 0%, rgba(24, 144, 255, 0.08) 58%, rgba(24, 144, 255, 0) 72%);
         position: absolute;
-        right: 14px;
-        bottom: 18px;
-        z-index: 1001;
-        min-width: 104px;
-        height: 40px;
-        padding: 0 14px;
-        border: none;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.94);
-        color: #1f1f1f;
-        font-size: 14px;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+        left: 50%;
+        top: 16px;
+        transform: translateX(-50%);
       }
-      #followBtn.is-free {
-        background: #1890ff;
-        color: #fff;
+      #carArrow {
+        width: 0;
+        height: 0;
+        border-left: 14px solid transparent;
+        border-right: 14px solid transparent;
+        border-bottom: 26px solid #1677ff;
+        filter: drop-shadow(0 6px 10px rgba(22, 119, 255, 0.35));
+        z-index: 2;
       }
-      #versionBadge {
-        position: fixed;
-        left: 12px;
-        top: 58px;
-        z-index: 1003;
-        background: #ff4d4f;
-        color: #fff;
-        padding: 8px 10px;
+      #carBody {
+        width: 32px;
+        height: 48px;
+        margin-top: -2px;
+        border-radius: 16px 16px 14px 14px;
+        background: linear-gradient(180deg, #ffffff 0%, #d6e6ff 100%);
+        border: 2px solid rgba(22, 119, 255, 0.7);
+        box-shadow: 0 8px 18px rgba(10, 17, 30, 0.24);
+        position: relative;
+        z-index: 3;
+      }
+      #carBody::before {
+        content: "";
+        position: absolute;
+        left: 5px;
+        right: 5px;
+        top: 7px;
+        height: 14px;
         border-radius: 10px;
+        background: rgba(22, 119, 255, 0.14);
+      }
+      #bottomPanel {
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        bottom: 18px;
+        z-index: 11;
+        padding: 14px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+      }
+      #panelHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      #stageTag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 28px;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: rgba(22, 119, 255, 0.1);
+        color: #1677ff;
         font-size: 12px;
         font-weight: 700;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-        max-width: calc(100% - 24px);
-        box-sizing: border-box;
-        word-break: break-all;
       }
-      #gestureDebugPanel {
-        position: fixed;
-        left: 12px;
-        top: 128px;
-        z-index: 1004;
-        min-width: 220px;
-        max-width: calc(100% - 24px);
-        background: rgba(0, 0, 0, 0.72);
-        color: #fff;
+      #panelTitle {
+        margin-top: 10px;
+        font-size: 18px;
+        font-weight: 700;
+        color: #182233;
+      }
+      #panelDesc {
+        margin-top: 6px;
+        color: #6b7788;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #statsRow {
+        margin-top: 14px;
+        display: flex;
+        gap: 12px;
+      }
+      .stat-card {
+        flex: 1;
         padding: 10px 12px;
-        border-radius: 10px;
+        border-radius: 14px;
+        background: #f5f8fd;
+      }
+      .stat-label {
+        color: #7f8a9c;
         font-size: 12px;
-        line-height: 1.6;
-        box-sizing: border-box;
-        white-space: pre-line;
+      }
+      .stat-value {
+        margin-top: 6px;
+        color: #182233;
+        font-size: 20px;
+        font-weight: 700;
+      }
+      #panelActions {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+      }
+      #focusBtn,
+      #freeBtn {
+        flex: 1;
+        height: 42px;
+        border: none;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      #focusBtn {
+        background: linear-gradient(135deg, #1677ff, #49a5ff);
+        color: #fff;
+        box-shadow: 0 10px 18px rgba(22, 119, 255, 0.22);
+      }
+      #freeBtn {
+        background: #eef4fb;
+        color: #36506d;
       }
     </style>
   </head>
   <body>
-    <div id="mapWrapper">
-      <div id="mapDiv"></div>
-      <div id="gestureLayer"></div>
-      <button id="followBtn" type="button">开始跟随</button>
+    <div id="app">
+      <img id="mapImage" alt="滴图导航" />
+      <div id="loadingMask">正在规划路线...</div>
+
+      <div id="topCard">
+        <div id="topRow">
+          <div id="turnIcon">↑</div>
+          <div id="topText">
+            <div id="turnPrimary">正在加载导航</div>
+            <div id="turnSecondary">请稍候，正在请求滴滴路线</div>
+          </div>
+        </div>
+        <div id="summaryRow">
+          <div class="summary-pill" id="summaryDistance">剩余距离 --</div>
+          <div class="summary-pill" id="summaryDuration">预计到达 --</div>
+          <div class="summary-pill" id="summaryStage">导航阶段 --</div>
+        </div>
+      </div>
+
+      <div id="modeChip">跟随视角</div>
+      <div id="tip"></div>
+
+      <div id="carAnchor">
+        <div id="carHalo"></div>
+        <div id="carArrow"></div>
+        <div id="carBody"></div>
+      </div>
+
+      <div id="bottomPanel">
+        <div id="panelHeader">
+          <div id="stageTag">去取餐</div>
+          <div id="summarySpeed" class="summary-pill">路线已锁定</div>
+        </div>
+        <div id="panelTitle">正在前往目的地</div>
+        <div id="panelDesc">当前导航将尽量保持骑手视角，重点展示前方道路和剩余路线。</div>
+        <div id="statsRow">
+          <div class="stat-card">
+            <div class="stat-label">剩余里程</div>
+            <div class="stat-value" id="remainDistance">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">预计时间</div>
+            <div class="stat-value" id="remainDuration">--</div>
+          </div>
+        </div>
+        <div id="panelActions">
+          <button id="focusBtn" type="button">回到跟随</button>
+          <button id="freeBtn" type="button">自由查看</button>
+        </div>
+      </div>
     </div>
-    <div id="tip" style="display:none;"></div>
-    <div id="versionBadge">NEW-MAP-V1</div>
-    <div id="gestureDebugPanel">gesture loaded: no
-touchstart count: 0
-touchmove count: 0
-last dx: 0
-last dy: 0
-setCenter called: no
-center changed: no
-map exists: no
-viewport width: 0
-viewport height: 0
-local delta x: 0
-local delta y: 0
-nextCenter exists: no
-setCenter type: unknown
-panTo type: unknown
-centerAndZoom type: unknown
-getZoom type: unknown
-pan method used: none</div>
-    <script id="gestureScript" src="./delivery-map-gesture/gesture-controller.js?v=NEW-MAP-V1"></script>
     <script>
       ;(function () {
-        var DEBUG_VISIBLE = false
+        var mapImage = document.getElementById("mapImage")
+        var loadingMask = document.getElementById("loadingMask")
+        var tipEl = document.getElementById("tip")
+        var modeChip = document.getElementById("modeChip")
+        var focusBtn = document.getElementById("focusBtn")
+        var freeBtn = document.getElementById("freeBtn")
+        var turnIcon = document.getElementById("turnIcon")
+        var turnPrimary = document.getElementById("turnPrimary")
+        var turnSecondary = document.getElementById("turnSecondary")
+        var stageTag = document.getElementById("stageTag")
+        var panelTitle = document.getElementById("panelTitle")
+        var panelDesc = document.getElementById("panelDesc")
+        var remainDistanceEl = document.getElementById("remainDistance")
+        var remainDurationEl = document.getElementById("remainDuration")
+        var summaryDistanceEl = document.getElementById("summaryDistance")
+        var summaryDurationEl = document.getElementById("summaryDuration")
+        var summaryStageEl = document.getElementById("summaryStage")
+        var summarySpeedEl = document.getElementById("summarySpeed")
+
+        var simTimer = null
+        var simIdx = 0
+        var routeCoords = []
+        var routeSummary = { dist: 0, duration: 0 }
+        var riderPos = null
+        var merchantPos = null
+        var customerPos = null
+        var actualDest = null
+        var lastRenderAt = 0
+        var queuedTimer = null
+        var fixedCenterMode = true
+        var lastRequestedZoom = null
+        var readyNotified = false
 
         function qs() {
-          var res = {}
-          var s = window.location.search || ''
-          if (!s || s.length < 2) return res
-          var parts = s.substring(1).split('&')
+          var result = {}
+          var search = window.location.search || ""
+          if (!search || search.length < 2) return result
+          var parts = search.substring(1).split("&")
           for (var i = 0; i < parts.length; i++) {
-            var kv = parts[i].split('=')
-            var k = decodeURIComponent(kv[0] || '')
-            var v = decodeURIComponent(kv[1] || '')
-            if (k) res[k] = v
+            var piece = parts[i].split("=")
+            var key = decodeURIComponent(piece[0] || "")
+            var value = decodeURIComponent(piece[1] || "")
+            if (key) result[key] = value
           }
-          return res
+          return result
         }
 
-        function showTip(text) {
-          var el = document.getElementById('tip')
-          if (!el) return
-          el.style.display = 'block'
-          el.textContent = text
-        }
-
-        function showVersionBadge(text) {
-          var el = document.getElementById('versionBadge')
-          if (!el) return
-          el.style.display = DEBUG_VISIBLE ? 'block' : 'none'
-          el.textContent = text
-        }
-
-        function renderGestureDebugPanel(state) {
-          var el = document.getElementById('gestureDebugPanel')
-          if (!el || !state) return
-          el.style.display = DEBUG_VISIBLE ? 'block' : 'none'
-          el.textContent = [
-            'gesture loaded: ' + (state.gestureLoaded ? 'yes' : 'no'),
-            'touchstart count: ' + Number(state.touchstartCount || 0),
-            'touchmove count: ' + Number(state.touchmoveCount || 0),
-            'last dx: ' + Number(state.lastDx || 0),
-            'last dy: ' + Number(state.lastDy || 0),
-            'setCenter called: ' + (state.setCenterCalled ? 'yes' : 'no'),
-            'center changed: ' + (state.centerChanged ? 'yes' : 'no'),
-            'map exists: ' + (state.mapExists ? 'yes' : 'no'),
-            'viewport width: ' + Number(state.viewportWidth || 0),
-            'viewport height: ' + Number(state.viewportHeight || 0),
-            'local delta x: ' + Number(state.localDeltaX || 0),
-            'local delta y: ' + Number(state.localDeltaY || 0),
-            'nextCenter exists: ' + (state.nextCenterExists ? 'yes' : 'no'),
-            'setCenter type: ' + String(state.setCenterType || 'unknown'),
-            'panTo type: ' + String(state.panToType || 'unknown'),
-            'centerAndZoom type: ' + String(state.centerAndZoomType || 'unknown'),
-            'getZoom type: ' + String(state.getZoomType || 'unknown'),
-            'pan method used: ' + String(state.panMethodUsed || 'none')
-          ].join('\n')
-        }
-
-        function ensureGestureDebugState() {
-          if (!window.__merchantGestureDebugState) {
-            window.__merchantGestureDebugState = {
-              gestureLoaded: false,
-              touchstartCount: 0,
-              touchmoveCount: 0,
-              lastDx: 0,
-              lastDy: 0,
-              setCenterCalled: false,
-              centerChanged: false,
-              mapExists: false,
-              viewportWidth: 0,
-              viewportHeight: 0,
-              localDeltaX: 0,
-              localDeltaY: 0,
-              nextCenterExists: false,
-              setCenterType: 'unknown',
-              panToType: 'unknown',
-              centerAndZoomType: 'unknown',
-              getZoomType: 'unknown',
-              panMethodUsed: 'none'
-            }
-          }
-          return window.__merchantGestureDebugState
-        }
-
-        window.updateMerchantGestureDebugPanel = function (patch) {
-          var state = ensureGestureDebugState()
-          if (patch && typeof patch === 'object') {
-            for (var key in patch) {
-              if (Object.prototype.hasOwnProperty.call(patch, key)) {
-                state[key] = patch[key]
-              }
-            }
-          }
-          renderGestureDebugPanel(state)
-        }
-
-        function loadScript(src) {
-          return new Promise(function (resolve, reject) {
-            var sc = document.createElement('script')
-            sc.type = 'text/javascript'
-            sc.src = src
-            sc.onload = resolve
-            sc.onerror = reject
-            document.head.appendChild(sc)
-          })
-        }
-
-        function toNum(v) {
-          var n = Number(v)
+        function toNum(value) {
+          var n = Number(value)
           return Number.isFinite(n) ? n : null
         }
 
-        var map = null
-        var start = null
-        var dest = null
-        var routeCoords = []
-        var riderMarker = null
-        var endMarker = null
-        var polyline = null
-        var simTimer = null
-        var simIdx = 0
-        var lastRemainingIndex = 0
-        var lastMarkerHeading = null
-        var lastMotionSample = null
-        var lastForwardBearing = null
-        var followZoom = 17
-        var hasShownRouteOverview = false
-        var followTimer = null
-        var currentRotation = 180
-        var followPausedUntil = 0
-        var viewMode = 'free'
-        var lastRiderPoint = null
-        var hasAutoCenteredOnInit = false
-        var autoRotateEnabled = false
-        var gestureController = null
-
-        function asPlainCoords(list) {
-          if (!list || !list.length) return []
-          var out = []
-          for (var i = 0; i < list.length; i++) {
-            var pt = list[i]
-            if (!pt) continue
-            var lng = typeof pt.getLng === 'function' ? pt.getLng() : pt.lng
-            var lat = typeof pt.getLat === 'function' ? pt.getLat() : pt.lat
-            if (typeof lng === 'number' && typeof lat === 'number') {
-              out.push({ lng: lng, lat: lat })
-            } else if (lng !== undefined && lat !== undefined) {
-              out.push({ lng: Number(lng), lat: Number(lat) })
-            }
-          }
-          return out.filter(function (p) {
-            return Number.isFinite(p.lng) && Number.isFinite(p.lat)
-          })
+        function toPoint(lng, lat) {
+          var x = toNum(lng)
+          var y = toNum(lat)
+          if (x === null || y === null) return null
+          return { lng: x, lat: y }
         }
 
-        function distanceSq(a, b) {
-          if (!a || !b) return Number.POSITIVE_INFINITY
-          var dlng = Number(a.lng) - Number(b.lng)
-          var dlat = Number(a.lat) - Number(b.lat)
-          if (!Number.isFinite(dlng) || !Number.isFinite(dlat)) {
-            return Number.POSITIVE_INFINITY
-          }
-          return dlng * dlng + dlat * dlat
+        function pointToText(point) {
+          return point ? point.lng + "," + point.lat : ""
         }
 
-        function normalizeRouteCoordsDirection(coords, startPoint) {
-          if (!coords || coords.length < 2 || !startPoint) {
-            return coords || []
-          }
-          var first = coords[0]
-          var last = coords[coords.length - 1]
-          var firstDist = distanceSq(first, startPoint)
-          var lastDist = distanceSq(last, startPoint)
-          if (lastDist < firstDist) {
-            return coords.slice().reverse()
-          }
-          return coords
-        }
-
-        function clearRouteOverlays() {
-          if (!map) return
-          if (polyline) {
-            try {
-              map.removeOverLay(polyline)
-            } catch (e) {}
-          }
-          polyline = null
-        }
-
-        function findNearestRouteIndex(lng, lat) {
-          if (!routeCoords || !routeCoords.length) {
-            return 0
-          }
-          var target = { lng: lng, lat: lat }
-          var startIdx = Math.max(0, Math.min(lastRemainingIndex || 0, routeCoords.length - 1))
-          var bestIdx = startIdx
-          var bestDist = Number.POSITIVE_INFINITY
-          for (var i = startIdx; i < routeCoords.length; i++) {
-            var dist = distanceSq(routeCoords[i], target)
-            if (dist < bestDist) {
-              bestDist = dist
-              bestIdx = i
-            }
-          }
-          return bestIdx
-        }
-
-        function drawRemaining(fromIndex) {
-          if (!map) return
-          clearRouteOverlays()
-          if (!routeCoords || !routeCoords.length) return
-          var idx = Math.max(0, Math.min(fromIndex || 0, routeCoords.length - 1))
-          lastRemainingIndex = idx
-          var list = []
-          for (var i = idx; i < routeCoords.length; i++) {
-            list.push(new T.LngLat(routeCoords[i].lng, routeCoords[i].lat))
-          }
-          if (list.length < 2) {
-            return
-          }
-          polyline = new T.Polyline(list, {
-            weight: 6,
-            opacity: 0.85,
-            color: '#0091FF',
-            lineStyle: 'solid'
-          })
-          map.addOverLay(polyline)
-        }
-
-        function normalizeHeading(v) {
-          var n = Number(v)
-          if (!Number.isFinite(n)) {
-            return null
-          }
-          n = n % 360
-          if (n < 0) {
-            n += 360
-          }
-          return n
-        }
-
-        function distanceMeters(a, b) {
-          if (!a || !b) return Number.POSITIVE_INFINITY
-          var lng1 = Number(a.lng)
-          var lat1 = Number(a.lat)
-          var lng2 = Number(b.lng)
-          var lat2 = Number(b.lat)
-          if (!Number.isFinite(lng1) || !Number.isFinite(lat1) || !Number.isFinite(lng2) || !Number.isFinite(lat2)) {
-            return Number.POSITIVE_INFINITY
-          }
-          var meanLat = ((lat1 + lat2) / 2) * Math.PI / 180
-          var dx = (lng2 - lng1) * 111320 * Math.cos(meanLat)
-          var dy = (lat2 - lat1) * 110540
-          return Math.sqrt(dx * dx + dy * dy)
-        }
-
-        function computeBearing(fromPoint, toPoint) {
-          if (!fromPoint || !toPoint) return null
-          var lng1 = Number(fromPoint.lng) * Math.PI / 180
-          var lat1 = Number(fromPoint.lat) * Math.PI / 180
-          var lng2 = Number(toPoint.lng) * Math.PI / 180
-          var lat2 = Number(toPoint.lat) * Math.PI / 180
-          if (!Number.isFinite(lng1) || !Number.isFinite(lat1) || !Number.isFinite(lng2) || !Number.isFinite(lat2)) {
-            return null
-          }
-          var y = Math.sin(lng2 - lng1) * Math.cos(lat2)
-          var x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lng2 - lng1)
-          if (!Number.isFinite(x) || !Number.isFinite(y)) {
-            return null
-          }
-          return normalizeHeading(Math.atan2(y, x) * 180 / Math.PI)
-        }
-
-        function angleDelta(target, current) {
-          var t = normalizeHeading(target)
-          var c = normalizeHeading(current)
-          if (t === null || c === null) {
-            return 180
-          }
-          var delta = t - c
-          while (delta > 180) delta -= 360
-          while (delta < -180) delta += 360
-          return delta
-        }
-
-        function buildRiderIconDataUrl(heading) {
-          var svg = ''
-          svg += '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">'
-          svg += '<circle cx="20" cy="20" r="12" fill="#1890FF" fill-opacity="0.16" stroke="#1890FF" stroke-width="2"/>'
-          svg += '<circle cx="20" cy="20" r="7.5" fill="#1890FF" stroke="#ffffff" stroke-width="2"/>'
-          svg += '<circle cx="20" cy="20" r="2.6" fill="#ffffff"/>'
-          svg += '</svg>'
-          return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
-        }
-
-        function createRiderIcon(heading) {
-          if (!window.T || typeof T.Icon !== 'function' || typeof T.Point !== 'function') {
-            return null
-          }
+        function postToHost(payload) {
           try {
-            return new T.Icon({
-              iconUrl: buildRiderIconDataUrl(heading),
-              iconSize: new T.Point(40, 40),
-              iconAnchor: new T.Point(20, 20)
-            })
-          } catch (e) {
-            return null
-          }
-        }
-
-        function resolveForwardBearing(lng, lat, rawHeading, rawSpeed, rawTs) {
-          var heading = normalizeHeading(rawHeading)
-          var speed = Number(rawSpeed)
-          var ts = Number(rawTs)
-          var nowTs = Number.isFinite(ts) ? ts : Date.now()
-          var currentPoint = { lng: lng, lat: lat, ts: nowTs }
-          var movementBearing = null
-          if (lastMotionSample) {
-            var movedMeters = distanceMeters(lastMotionSample, currentPoint)
-            var timeGap = Math.max(0, nowTs - Number(lastMotionSample.ts || 0))
-            if (movedMeters >= 4 && timeGap >= 500) {
-              movementBearing = computeBearing(lastMotionSample, currentPoint)
-            }
-          }
-          lastMotionSample = currentPoint
-
-          var candidate = null
-          if (movementBearing !== null) {
-            candidate = movementBearing
-          } else if (Number.isFinite(speed) && speed >= 1.2 && heading !== null) {
-            candidate = heading
-          } else if (heading !== null && lastForwardBearing === null) {
-            candidate = heading
-          } else {
-            candidate = lastForwardBearing
-          }
-          if (candidate === null) {
-            return null
-          }
-          if (lastForwardBearing !== null && Math.abs(angleDelta(candidate, lastForwardBearing)) < 8) {
-            return lastForwardBearing
-          }
-          lastForwardBearing = candidate
-          return candidate
-        }
-
-        function resolveMarkerHeading(mapBearing) {
-          var heading = normalizeHeading(mapBearing)
-          if (heading === null) {
-            return lastMarkerHeading
-          }
-          return heading
-        }
-
-        function pointX(pt) {
-          if (!pt) return null
-          if (typeof pt.getX === 'function') return Number(pt.getX())
-          if (pt.x !== undefined) return Number(pt.x)
-          return null
-        }
-
-        function pointY(pt) {
-          if (!pt) return null
-          if (typeof pt.getY === 'function') return Number(pt.getY())
-          if (pt.y !== undefined) return Number(pt.y)
-          return null
-        }
-
-        function createPoint(x, y) {
-          if (window.T && typeof T.Point === 'function') {
-            return new T.Point(x, y)
-          }
-          return { x: x, y: y }
-        }
-
-        function applyForwardLookCenter(ll) {
-          if (!map || !ll) return
-          if (typeof map.lngLatToContainerPoint !== 'function' || typeof map.containerPointToLngLat !== 'function') {
-            return
-          }
-          var riderPixel = map.lngLatToContainerPoint(ll)
-          var riderX = pointX(riderPixel)
-          var riderY = pointY(riderPixel)
-          if (!Number.isFinite(riderX) || !Number.isFinite(riderY)) {
-            return
-          }
-          var size = typeof map.getSize === 'function' ? map.getSize() : null
-          var width = pointX(size)
-          var height = pointY(size)
-          if (!Number.isFinite(width) || !Number.isFinite(height)) {
-            var rect = document.getElementById('mapDiv')
-            width = rect ? rect.clientWidth : null
-            height = rect ? rect.clientHeight : null
-          }
-          if (!Number.isFinite(width) || !Number.isFinite(height)) {
-            return
-          }
-          var targetX = Math.round(width / 2)
-          var targetY = Math.round(height * 0.75)
-          var centerPixel = createPoint(
-            Math.round(riderX * 2 - targetX),
-            Math.round(riderY * 2 - targetY)
-          )
-          var newCenter = map.containerPointToLngLat(centerPixel)
-          if (!newCenter) {
-            return
-          }
-          if (setMapCenterWithFallback(newCenter)) {
-            return
-          }
-        }
-
-        function setMapCenterWithFallback(nextCenter) {
-          if (!nextCenter) return false
-          if (gestureController && typeof gestureController.setMapCenterWithFallback === 'function') {
-            return gestureController.setMapCenterWithFallback(nextCenter)
-          }
-          try {
-            if (typeof map.setCenter === 'function') {
-              map.setCenter(nextCenter)
-              return true
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(payload, "*")
             }
           } catch (e) {}
           try {
-            if (typeof map.panTo === 'function') {
-              map.panTo(nextCenter)
-              return true
+            if (window.uni && typeof window.uni.postMessage === "function") {
+              window.uni.postMessage({ data: payload })
             }
           } catch (e) {}
-          try {
-            if (typeof map.centerAndZoom === 'function' && typeof map.getZoom === 'function') {
-              map.centerAndZoom(nextCenter, map.getZoom())
-              return true
-            }
-          } catch (e) {}
-          return false
-        }
-
-        function clearFollowTimer() {
-          if (followTimer) {
-            clearTimeout(followTimer)
-          }
-          followTimer = null
-        }
-
-        function pauseFollow(ms) {
-          followPausedUntil = Date.now() + Math.max(0, Number(ms) || 0)
-        }
-
-        function isFollowPaused() {
-          return viewMode !== 'follow' || followPausedUntil > Date.now()
-        }
-
-        function setMapTransitionEnabled(enabled) {
-          var mapEl = document.getElementById('mapDiv')
-          if (!mapEl) return
-          mapEl.style.transition = enabled ? 'transform 0.25s ease-out' : 'none'
-        }
-
-        function applyCurrentRotation() {
-          var mapEl = document.getElementById('mapDiv')
-          if (!mapEl) return
-          if (!currentRotation) {
-            mapEl.style.transform = ''
-            syncMapDragMode()
-            return
-          }
-          mapEl.style.transform = 'rotate(' + currentRotation + 'deg)'
-          syncMapDragMode()
-        }
-
-        function updateFollowButton() {
-          var btn = document.getElementById('followBtn')
-          if (!btn) return
-          btn.textContent = '回到当前位置'
-          if (viewMode === 'follow') {
-            btn.classList.remove('is-free')
-          } else {
-            btn.classList.add('is-free')
-          }
-        }
-
-        function syncMapDragMode() {
-          if (!map) return
-          var overlay = document.getElementById('gestureLayer')
-          if (overlay) {
-            overlay.style.pointerEvents = 'none'
-          }
-          try {
-            if (typeof map.disableDrag === 'function') {
-              map.disableDrag()
-            }
-          } catch (e) {}
-        }
-
-        function setFreeViewMode() {
-          if (viewMode === 'free') {
-            return
-          }
-          viewMode = 'free'
-          clearFollowTimer()
-          updateFollowButton()
-        }
-
-        function setFollowViewMode() {
-          viewMode = 'follow'
-          followPausedUntil = 0
-          updateFollowButton()
-          if (lastRiderPoint) {
-            applyFollowView(lastRiderPoint.lng, lastRiderPoint.lat)
-          }
-        }
-
-        function applyCurrentLocationViewNow(forcePoint) {
-          var point = forcePoint || lastRiderPoint || (start ? { lng: start.getLng(), lat: start.getLat() } : null)
-          clearFollowTimer()
-          viewMode = 'follow'
-          followPausedUntil = 0
-          updateFollowButton()
-          if (point && Number.isFinite(Number(point.lng)) && Number.isFinite(Number(point.lat))) {
-            applyFollowView(Number(point.lng), Number(point.lat))
-          }
-        }
-
-        function ensureInitialCurrentLocationView() {
-          if (hasAutoCenteredOnInit || !map || !hasShownRouteOverview || (!lastRiderPoint && !start)) {
-            return
-          }
-          hasAutoCenteredOnInit = true
-          applyCurrentLocationViewNow(lastRiderPoint)
-        }
-
-        function applyMapRotation(viewBearing) {
-          if (!autoRotateEnabled) {
-            return
-          }
-          var bearing = normalizeHeading(viewBearing)
-          if (bearing === null) {
-            currentRotation = 0
-            applyCurrentRotation()
-            return
-          }
-          setMapTransitionEnabled(true)
-          currentRotation = -bearing
-          applyCurrentRotation()
-        }
-
-        function resolveFollowCenter(lng, lat) {
-          var focusLng = lng
-          var focusLat = lat
-          if (routeCoords && routeCoords.length > 1) {
-            var nearestIdx = findNearestRouteIndex(lng, lat)
-            var remaining = routeCoords.length - 1 - nearestIdx
-            var lookAheadStep = Math.max(3, Math.min(12, Math.floor(remaining / 3)))
-            var aheadIdx = Math.min(nearestIdx + lookAheadStep, routeCoords.length - 1)
-            var aheadPoint = routeCoords[aheadIdx]
-            if (aheadPoint && Number.isFinite(Number(aheadPoint.lng)) && Number.isFinite(Number(aheadPoint.lat))) {
-              focusLng = (Number(lng) + Number(aheadPoint.lng)) / 2
-              focusLat = (Number(lat) + Number(aheadPoint.lat)) / 2
-            }
-          }
-          return new T.LngLat(focusLng, focusLat)
-        }
-
-        function getRouteBearing(lng, lat) {
-          if (!routeCoords || routeCoords.length < 2) return null
-          var nearestIdx = findNearestRouteIndex(lng, lat)
-          var remaining = routeCoords.length - 1 - nearestIdx
-          var step = Math.max(3, Math.min(15, Math.floor(remaining / 3)))
-          var aheadIdx = Math.min(nearestIdx + step, routeCoords.length - 1)
-          if (aheadIdx <= nearestIdx) return null
-          return computeBearing({ lng: lng, lat: lat }, routeCoords[aheadIdx])
-        }
-
-        function applyFollowView(lng, lat) {
-          if (!map) return
-          var ll = new T.LngLat(lng, lat)
-          var viewBearing = lastForwardBearing
-          if (viewBearing === null) {
-            viewBearing = getRouteBearing(lng, lat)
-          }
-          try {
-            if (typeof map.centerAndZoom === 'function') {
-              map.centerAndZoom(ll, followZoom)
-            }
-          } catch (e) {}
-          applyMapRotation(viewBearing)
-          if (viewBearing !== null) {
-            try {
-              var riderPixel = map.lngLatToContainerPoint(ll)
-              var rx = pointX(riderPixel)
-              var ry = pointY(riderPixel)
-              if (Number.isFinite(rx) && Number.isFinite(ry)) {
-                var wrapper = document.getElementById('mapWrapper')
-                var viewH = wrapper ? wrapper.clientHeight : window.innerHeight
-                if (Number.isFinite(viewH) && viewH > 0) {
-                  var D = viewH * 0.25
-                  var rad = viewBearing * Math.PI / 180
-                  var newCx = Math.round(rx + D * Math.sin(rad))
-                  var newCy = Math.round(ry - D * Math.cos(rad))
-                  var newCenter = map.containerPointToLngLat(createPoint(newCx, newCy))
-                  if (newCenter) {
-                    map.setCenter(newCenter)
-                  }
-                }
-              }
-            } catch (e) {}
-          }
-        }
-
-        function scheduleFollowView(lng, lat) {
-          clearFollowTimer()
-          followTimer = setTimeout(function () {
-            if (!isFollowPaused()) {
-              applyFollowView(lng, lat)
-            }
-          }, 1200)
-        }
-
-        function setRiderPosition(lng, lat, options) {
-          if (!map) return
-          var opts = options || {}
-          var viewBearing = resolveForwardBearing(lng, lat, opts.heading, opts.speed, opts.ts)
-          var heading = resolveMarkerHeading(viewBearing)
-          lastRiderPoint = { lng: lng, lat: lat }
-          var icon = createRiderIcon(heading)
-          var ll = new T.LngLat(lng, lat)
-          if (!riderMarker) {
-            riderMarker = icon ? new T.Marker(ll, { icon: icon }) : new T.Marker(ll)
-            map.addOverLay(riderMarker)
-          } else if (typeof riderMarker.setLngLat === 'function') {
-            riderMarker.setLngLat(ll)
-          } else {
-            try {
-              map.removeOverLay(riderMarker)
-            } catch (e) {}
-            riderMarker = icon ? new T.Marker(ll, { icon: icon }) : new T.Marker(ll)
-            map.addOverLay(riderMarker)
-          }
-          if (icon && riderMarker && typeof riderMarker.setIcon === 'function') {
-            try {
-              riderMarker.setIcon(icon)
-            } catch (e) {}
-          }
-          if (heading !== null) {
-            lastMarkerHeading = heading
-          }
-          if (!opts.skipRemaining && routeCoords && routeCoords.length > 1) {
-            var nearestIdx = findNearestRouteIndex(lng, lat)
-            drawRemaining(nearestIdx)
-          }
-          if (!opts.skipFollow && hasShownRouteOverview && !isFollowPaused()) {
-            applyFollowView(lng, lat)
-          }
-        }
-
-        function handleRiderLocationMessage(d) {
-          if (!d) return
-          var lng = toNum(d.lng)
-          var lat = toNum(d.lat)
-          if (lng === null || lat === null) {
-            return
-          }
-          setRiderPosition(lng, lat, {
-            heading: d.heading,
-            speed: d.speed,
-            ts: d.ts
-          })
         }
 
         function notifyHostReady() {
-          var payload = { type: 'map_ready', ts: Date.now() }
-          try {
-            if (window.parent && window.parent !== window) {
-              window.parent.postMessage(payload, '*')
-            }
-          } catch (e) {}
-          try {
-            if (window.uni && typeof window.uni.postMessage === 'function') {
-              window.uni.postMessage({ data: payload })
-            }
-          } catch (e) {}
+          if (readyNotified) return
+          readyNotified = true
+          postToHost({ type: "map_ready", ts: Date.now() })
         }
 
         function sendSimLocation(lng, lat) {
-          var payload = { type: 'sim_location', lng: lng, lat: lat, speed: 8, heading: 90, ts: Date.now() }
-          try {
-            if (window.parent && window.parent !== window) {
-              window.parent.postMessage(payload, '*')
+          postToHost({ type: "sim_location", lng: lng, lat: lat, speed: 8, heading: 90, ts: Date.now() })
+        }
+
+        function showTip(text) {
+          if (!tipEl) return
+          if (!text) {
+            tipEl.style.display = "none"
+            tipEl.textContent = ""
+            return
+          }
+          tipEl.style.display = "block"
+          tipEl.textContent = text
+        }
+
+        function setLoading(loading, text) {
+          if (!loadingMask) return
+          loadingMask.style.display = loading ? "flex" : "none"
+          loadingMask.textContent = text || "正在规划路线..."
+        }
+
+        function formatDistance(dist) {
+          var value = Number(dist || 0)
+          if (!Number.isFinite(value) || value <= 0) return "--"
+          if (value < 1000) return Math.round(value) + "米"
+          return (value / 1000).toFixed(1) + "公里"
+        }
+
+        function formatDuration(duration) {
+          var value = Number(duration || 0)
+          if (!Number.isFinite(value) || value <= 0) return "--"
+          var hours = Math.floor(value / 3600)
+          var minutes = Math.max(1, Math.round((value % 3600) / 60))
+          if (hours > 0) return hours + "小时" + minutes + "分钟"
+          return minutes + "分钟"
+        }
+
+        function calcDistanceMeters(start, end) {
+          if (!start || !end) return 0
+          var earthRadius = 6378137
+          var rad = Math.PI / 180
+          var lat1 = start.lat * rad
+          var lat2 = end.lat * rad
+          var deltaLat = (end.lat - start.lat) * rad
+          var deltaLng = (end.lng - start.lng) * rad
+          var a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2)
+          var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+          return earthRadius * c
+        }
+
+        function calcBearing(start, end) {
+          if (!start || !end) return 0
+          var rad = Math.PI / 180
+          var y = Math.sin((end.lng - start.lng) * rad) * Math.cos(end.lat * rad)
+          var x = Math.cos(start.lat * rad) * Math.sin(end.lat * rad) - Math.sin(start.lat * rad) * Math.cos(end.lat * rad) * Math.cos((end.lng - start.lng) * rad)
+          var bearing = Math.atan2(y, x) * (180 / Math.PI)
+          return (bearing + 360) % 360
+        }
+
+        function normalizeDeltaAngle(value) {
+          var result = value % 360
+          if (result > 180) result -= 360
+          if (result < -180) result += 360
+          return result
+        }
+
+        function readViewportSize() {
+          var ratio = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+          var width = Math.max(320, Math.min(1280, Math.round(window.innerWidth * ratio)))
+          var height = Math.max(320, Math.min(1600, Math.round(window.innerHeight * ratio)))
+          return { width: width, height: height }
+        }
+
+        function calcBounds(points) {
+          var valid = []
+          for (var i = 0; i < points.length; i++) {
+            var point = points[i]
+            if (point && Number.isFinite(point.lng) && Number.isFinite(point.lat)) {
+              valid.push(point)
             }
-          } catch (e) {}
-          try {
-            if (window.uni && typeof window.uni.postMessage === 'function') {
-              window.uni.postMessage({ data: payload })
+          }
+          if (!valid.length) return null
+          var minLng = valid[0].lng
+          var maxLng = valid[0].lng
+          var minLat = valid[0].lat
+          var maxLat = valid[0].lat
+          for (var j = 1; j < valid.length; j++) {
+            var p = valid[j]
+            minLng = Math.min(minLng, p.lng)
+            maxLng = Math.max(maxLng, p.lng)
+            minLat = Math.min(minLat, p.lat)
+            maxLat = Math.max(maxLat, p.lat)
+          }
+          return {
+            minLng: minLng,
+            maxLng: maxLng,
+            minLat: minLat,
+            maxLat: maxLat,
+            centerLng: (minLng + maxLng) / 2,
+            centerLat: (minLat + maxLat) / 2
+          }
+        }
+
+        function estimateZoomByDistance(dist) {
+          var value = Number(dist || 0)
+          if (value > 12000) return 12
+          if (value > 7000) return 13
+          if (value > 3500) return 14
+          if (value > 1600) return 15
+          if (value > 700) return 16
+          return 17
+        }
+
+        function sampleRoute(points, maxCount) {
+          if (!Array.isArray(points) || points.length <= maxCount) return points || []
+          var sampled = []
+          var step = (points.length - 1) / (maxCount - 1)
+          for (var i = 0; i < maxCount; i++) {
+            var index = Math.round(i * step)
+            sampled.push(points[index])
+          }
+          return sampled
+        }
+
+        function normalizeRoutePoints(points) {
+          var normalized = []
+          for (var i = 0; i < points.length; i++) {
+            var item = points[i]
+            var point = toPoint(item && item.longitude, item && item.latitude)
+            if (point) normalized.push(point)
+          }
+          return normalized
+        }
+
+        function getNearestRouteIndex(point) {
+          if (!point || !routeCoords.length) return 0
+          var bestIndex = 0
+          var bestDistance = Number.MAX_SAFE_INTEGER
+          for (var i = 0; i < routeCoords.length; i++) {
+            var dist = calcDistanceMeters(point, routeCoords[i])
+            if (dist < bestDistance) {
+              bestDistance = dist
+              bestIndex = i
             }
-          } catch (e) {}
+          }
+          return bestIndex
+        }
+
+        function getVisibleRoutePoints() {
+          if (!routeCoords.length) {
+            var fallback = []
+            if (riderPos) fallback.push(riderPos)
+            if (actualDest) fallback.push(actualDest)
+            return fallback
+          }
+          var startIndex = getNearestRouteIndex(riderPos || routeCoords[0])
+          var visible = []
+          if (riderPos) visible.push({ lng: riderPos.lng, lat: riderPos.lat })
+          for (var i = startIndex + 1; i < routeCoords.length; i++) {
+            visible.push(routeCoords[i])
+          }
+          if (actualDest) {
+            var last = visible[visible.length - 1]
+            if (!last || Math.abs(last.lng - actualDest.lng) + Math.abs(last.lat - actualDest.lat) > 0.00001) {
+              visible.push(actualDest)
+            }
+          }
+          return visible
+        }
+
+        function calcRemainingDistance(points) {
+          if (!points || points.length < 2) return calcDistanceMeters(riderPos, actualDest)
+          var total = 0
+          for (var i = 0; i < points.length - 1; i++) {
+            total += calcDistanceMeters(points[i], points[i + 1])
+          }
+          return total
+        }
+
+        function estimateRemainingDuration(remainingDist) {
+          if (!Number.isFinite(remainingDist) || remainingDist <= 0) return 0
+          if (routeSummary.dist > 0 && routeSummary.duration > 0) {
+            var speed = routeSummary.dist / Math.max(1, routeSummary.duration)
+            if (speed > 0) {
+              return Math.round(remainingDist / speed)
+            }
+          }
+          return Math.round(remainingDist / 6.94)
+        }
+
+        function getStageLabel() {
+          return actualDest === customerPos ? "去送餐" : "去取餐"
+        }
+
+        function getDestLabel() {
+          return actualDest === customerPos ? "用户地址" : "商家门店"
+        }
+
+        function getInstruction(visiblePoints, remainingDist) {
+          var stageText = actualDest === customerPos ? "前往用户" : "前往商家"
+          if (!visiblePoints || visiblePoints.length < 2) {
+            return {
+              icon: "↑",
+              primary: "继续" + stageText,
+              secondary: "导航已启动，正在等待路线数据。"
+            }
+          }
+          if (remainingDist <= 80) {
+            return {
+              icon: "◎",
+              primary: "即将到达",
+              secondary: "终点就在前方，请注意减速并确认位置。"
+            }
+          }
+          if (remainingDist <= 300) {
+            return {
+              icon: "↑",
+              primary: "继续前往终点",
+              secondary: "剩余 " + formatDistance(remainingDist) + "，请保持当前路线。"
+            }
+          }
+          var current = visiblePoints[0]
+          var next = visiblePoints[Math.min(1, visiblePoints.length - 1)]
+          var next2 = visiblePoints[Math.min(2, visiblePoints.length - 1)]
+          var firstBearing = calcBearing(current, next)
+          var secondBearing = calcBearing(next, next2)
+          var delta = normalizeDeltaAngle(secondBearing - firstBearing)
+          if (delta > 28) {
+            return {
+              icon: "↱",
+              primary: "前方路线偏右",
+              secondary: "约 " + formatDistance(calcDistanceMeters(current, next)) + " 后继续向右前方行驶。"
+            }
+          }
+          if (delta < -28) {
+            return {
+              icon: "↰",
+              primary: "前方路线偏左",
+              secondary: "约 " + formatDistance(calcDistanceMeters(current, next)) + " 后继续向左前方行驶。"
+            }
+          }
+          return {
+            icon: "↑",
+            primary: "沿当前道路继续前进",
+            secondary: "保持当前路线，继续" + stageText + "。"
+          }
+        }
+
+        function updatePanels(remainingDist, remainingDuration, visiblePoints) {
+          var instruction = getInstruction(visiblePoints, remainingDist)
+          var destLabel = getDestLabel()
+          var stageLabel = getStageLabel()
+
+          turnIcon.textContent = instruction.icon
+          turnPrimary.textContent = instruction.primary
+          turnSecondary.textContent = instruction.secondary
+          stageTag.textContent = stageLabel
+          panelTitle.textContent = destLabel
+          panelDesc.textContent = riderPos && actualDest
+            ? "当前位置 " + riderPos.lng.toFixed(5) + ", " + riderPos.lat.toFixed(5) + "  正在前往目的地。"
+            : "正在根据当前定位刷新导航。"
+          remainDistanceEl.textContent = formatDistance(remainingDist)
+          remainDurationEl.textContent = formatDuration(remainingDuration)
+          summaryDistanceEl.textContent = "剩余距离 " + formatDistance(remainingDist)
+          summaryDurationEl.textContent = "预计时间 " + formatDuration(remainingDuration)
+          summaryStageEl.textContent = "导航阶段 " + stageLabel
+          summarySpeedEl.textContent = fixedCenterMode ? "跟随中" : "自由查看"
+          modeChip.textContent = fixedCenterMode ? "跟随视角" : "自由查看"
+        }
+
+        function buildLabels() {
+          var items = []
+          if (actualDest) items.push(getDestLabel() + ",0,1,18,0xFF6A00,0xFFFFFF:" + pointToText(actualDest))
+          if (merchantPos && actualDest !== merchantPos) items.push("商家,0,1,16,0xFA8C16,0xFFFFFF:" + pointToText(merchantPos))
+          if (customerPos && actualDest !== customerPos) items.push("用户,0,1,16,0xFF4D4F,0xFFFFFF:" + pointToText(customerPos))
+          return items.join("|")
+        }
+
+        function buildPaths(points) {
+          var sampled = sampleRoute(points, 90)
+          if (!sampled || sampled.length < 2) return ""
+          var encoded = []
+          for (var i = 0; i < sampled.length; i++) {
+            encoded.push(pointToText(sampled[i]))
+          }
+          return "10,0x1677ff,1,0xffffff:" + encoded.join(";")
+        }
+
+        function getFollowCenter(visiblePoints) {
+          if (!riderPos) return actualDest || merchantPos || customerPos
+          if (!visiblePoints || visiblePoints.length < 2) return riderPos
+          var lookAhead = visiblePoints[Math.min(visiblePoints.length - 1, Math.max(1, Math.floor(visiblePoints.length * 0.2)))]
+          return {
+            lng: riderPos.lng + (lookAhead.lng - riderPos.lng) * 0.45,
+            lat: riderPos.lat + (lookAhead.lat - riderPos.lat) * 0.45
+          }
+        }
+
+        function buildStaticMapUrl(points, remainingDist, zoomOverride) {
+          var search = qs()
+          var key = String(search.key || "")
+          if (!key) throw new Error("缺少滴图 key")
+          var viewport = readViewportSize()
+          var boundsPoints = points.slice()
+          if (actualDest) boundsPoints.push(actualDest)
+          var bounds = calcBounds(boundsPoints)
+          var zoom = Number.isFinite(zoomOverride)
+            ? zoomOverride
+            : fixedCenterMode
+              ? estimateZoomByDistance(remainingDist)
+              : estimateZoomByDistance(Math.max(remainingDist, 1200))
+          var center = fixedCenterMode
+            ? getFollowCenter(points)
+            : (bounds ? { lng: bounds.centerLng, lat: bounds.centerLat } : riderPos || actualDest || { lng: 115.66638, lat: 32.18385 })
+          var params = [
+            "key=" + encodeURIComponent(key),
+            "location=" + encodeURIComponent(center.lng + "," + center.lat),
+            "zoom=" + encodeURIComponent(String(zoom)),
+            "size=" + encodeURIComponent(viewport.width + "*" + viewport.height)
+          ]
+          var paths = buildPaths(points)
+          if (paths) params.push("paths=" + encodeURIComponent(paths))
+          var labels = buildLabels()
+          if (labels) params.push("labels=" + encodeURIComponent(labels))
+          params.push("t=" + Date.now())
+          return "https://lbs.xiaojukeji.com/api/v2/staticmap?" + params.join("&")
+        }
+
+        function renderMap(force, zoomOverride) {
+          if (!mapImage) return
+          var now = Date.now()
+          if (!force && now - lastRenderAt < 900) {
+            if (queuedTimer) return
+            queuedTimer = setTimeout(function () {
+              queuedTimer = null
+              renderMap(true)
+            }, 320)
+            return
+          }
+          lastRenderAt = now
+
+          var visiblePoints = getVisibleRoutePoints()
+          var remainingDist = calcRemainingDistance(visiblePoints)
+          var remainingDuration = estimateRemainingDuration(remainingDist)
+
+          updatePanels(remainingDist, remainingDuration, visiblePoints)
+
+          try {
+            lastRequestedZoom = Number.isFinite(zoomOverride) ? zoomOverride : null
+            mapImage.src = buildStaticMapUrl(visiblePoints, remainingDist, zoomOverride)
+          } catch (error) {
+            showTip(error && error.message ? error.message : "滴图静态地图渲染失败")
+          }
+        }
+
+        function setFallbackRoute() {
+          routeCoords = []
+          if (riderPos) routeCoords.push({ lng: riderPos.lng, lat: riderPos.lat })
+          if (actualDest) routeCoords.push({ lng: actualDest.lng, lat: actualDest.lat })
+          routeSummary = { dist: calcDistanceMeters(riderPos, actualDest), duration: 0 }
+          renderMap(true)
+        }
+
+        async function requestRoute() {
+          var search = qs()
+          var key = String(search.key || "")
+          if (!key) throw new Error("缺少滴图 key")
+          if (!riderPos || !actualDest) throw new Error("路线起终点缺失")
+
+          var response = await fetch("https://lbs.xiaojukeji.com/api/v2/routeplanv3?key=" + encodeURIComponent(key), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              packs: [
+                {
+                  origin: pointToText(riderPos),
+                  destination: pointToText(actualDest),
+                  departure_time: Math.floor(Date.now() / 1000),
+                  routeplan_type: "1",
+                  need_polyline: true,
+                  eta_strategy: 0
+                }
+              ]
+            })
+          })
+          if (!response.ok) throw new Error("滴图路径规划请求失败")
+
+          var data = await response.json()
+          var result = data && data.results && data.results[0] ? data.results[0] : null
+          var route = result && result.routes && result.routes[0] ? result.routes[0] : null
+          if (!route) throw new Error((result && result.errmsg) || data.msg || "滴图未返回路线")
+
+          var coords = normalizeRoutePoints(route.geo_list || [])
+          if (!coords.length) throw new Error("滴图返回路线为空")
+
+          routeCoords = coords
+          if (actualDest) {
+            var lastPoint = routeCoords[routeCoords.length - 1]
+            if (!lastPoint || Math.abs(lastPoint.lng - actualDest.lng) + Math.abs(lastPoint.lat - actualDest.lat) > 0.00001) {
+              routeCoords.push({ lng: actualDest.lng, lat: actualDest.lat })
+            }
+          }
+          routeSummary = {
+            dist: Number(route.dist || 0),
+            duration: Number(route.duration || 0)
+          }
+          renderMap(true)
+        }
+
+        function handleRiderLocationMessage(payload) {
+          if (!payload) return
+          var next = toPoint(payload.lng, payload.lat)
+          if (!next) return
+          riderPos = next
+          fixedCenterMode = true
+          renderMap(false)
         }
 
         function stopSim() {
-          if (simTimer) {
-            clearInterval(simTimer)
-          }
+          if (simTimer) clearInterval(simTimer)
           simTimer = null
         }
 
         function startSim(intervalMs) {
           stopSim()
-          if (!routeCoords || routeCoords.length < 2) {
-            showTip('暂无可用于模拟的路线')
+          var visiblePoints = getVisibleRoutePoints()
+          if (!visiblePoints || visiblePoints.length < 2) {
+            showTip("暂无可用于模拟的路线")
             return
           }
           simIdx = 0
-          setRiderPosition(routeCoords[0].lng, routeCoords[0].lat, { skipRemaining: true })
-          drawRemaining(0)
-          sendSimLocation(routeCoords[0].lng, routeCoords[0].lat)
+          riderPos = { lng: visiblePoints[0].lng, lat: visiblePoints[0].lat }
+          fixedCenterMode = true
+          renderMap(true)
+          sendSimLocation(riderPos.lng, riderPos.lat)
           simTimer = setInterval(function () {
             simIdx += 1
-            if (simIdx >= routeCoords.length) {
+            if (simIdx >= visiblePoints.length) {
               stopSim()
               return
             }
-            var p = routeCoords[simIdx]
-            setRiderPosition(p.lng, p.lat, { skipRemaining: true })
-            drawRemaining(simIdx)
-            sendSimLocation(p.lng, p.lat)
+            var point = visiblePoints[simIdx]
+            riderPos = { lng: point.lng, lat: point.lat }
+            renderMap(false)
+            sendSimLocation(point.lng, point.lat)
           }, Number(intervalMs) || 1500)
         }
 
-        function setupDragOverlay() {
-          var wrapper = document.getElementById('mapWrapper')
-          var overlay = document.getElementById('gestureLayer')
-          var followBtn = document.getElementById('followBtn')
-          if (!wrapper || !overlay || typeof window.createDeliveryMapGestureController !== 'function') return
+        async function boot() {
+          var search = qs()
+          riderPos = toPoint(search.startLng, search.startLat)
+          merchantPos = toPoint(search.merchantLng, search.merchantLat)
+          customerPos = toPoint(search.customerLng, search.customerLat)
+          actualDest = search.stage === "delivery" ? customerPos : merchantPos
+          if (!actualDest) actualDest = toPoint(search.destLng, search.destLat)
+          fixedCenterMode = true
 
-          if (followBtn && !followBtn.__bound) {
-            followBtn.addEventListener('click', function (e) {
-              e.preventDefault()
-              e.stopPropagation()
-              applyCurrentLocationViewNow()
-            })
-            followBtn.__bound = true
-          }
-
-          if (gestureController && typeof gestureController.destroy === 'function') {
-            gestureController.destroy()
-          }
-
-          gestureController = window.createDeliveryMapGestureController({
-            wrapper: wrapper,
-            overlay: overlay,
-            eventTarget: wrapper,
-            getMap: function () {
-              return map
-            },
-            getRotation: function () {
-              return currentRotation
-            },
-            onFreeView: function () {
-              setFreeViewMode()
-            },
-            onInteractionStart: function () {
-              setMapTransitionEnabled(false)
-            },
-            onInteractionEnd: function () {
-              setMapTransitionEnabled(true)
-            },
-            onZoomChange: function (zoom) {
-              if (Number.isFinite(zoom)) {
-                followZoom = zoom
-              }
-            }
-          })
-
-          updateFollowButton()
-        }
-
-        function initMap(p) {
-          var startLng = toNum(p.startLng)
-          var startLat = toNum(p.startLat)
-          var destLng = toNum(p.destLng)
-          var destLat = toNum(p.destLat)
-          var stage = p.stage === 'delivery' ? 'delivery' : 'pickup'
-
-          if (startLng === null || startLat === null || destLng === null || destLat === null) {
-            showTip('坐标参数缺失')
-            return
-          }
-
-          map = new T.Map('mapDiv', { projection: 'EPSG:4326' })
-          start = new T.LngLat(startLng, startLat)
-          dest = new T.LngLat(destLng, destLat)
-          map.centerAndZoom(start, 15)
-          try { if (typeof map.enableDrag === 'function') map.enableDrag() } catch (e) {}
-          syncMapDragMode()
-          setupDragOverlay()
-          applyCurrentRotation()
-          updateFollowButton()
           notifyHostReady()
 
-          var route = new T.DrivingRoute(map)
-          route.setSearchCompleteCallback(function (res) {
-            try {
-              map.clearOverLays()
-            } catch (e) {}
-
-            try {
-              endMarker = new T.Marker(dest)
-              map.addOverLay(endMarker)
-            } catch (e) {}
-
-            try {
-              var list = res && res.getPlan && res.getPlan(0) && res.getPlan(0).getPath ? res.getPlan(0).getPath() : null
-              if (list && list.length) {
-                routeCoords = normalizeRouteCoordsDirection(asPlainCoords(list), {
-                  lng: startLng,
-                  lat: startLat
-                })
-                lastRemainingIndex = 0
-                lastMotionSample = null
-                lastForwardBearing = null
-                setRiderPosition(startLng, startLat, { skipFollow: true, skipRemaining: true })
-                drawRemaining(0)
-                if (map.setViewport) {
-                  map.setViewport(list)
-                }
-                hasShownRouteOverview = true
-                ensureInitialCurrentLocationView()
-              } else {
-                showTip('未获取到路线')
-              }
-            } catch (e) {
-              showTip('路线渲染失败')
-            }
-          })
-
-          showTip(stage === 'delivery' ? '去送餐路线' : '去取餐路线')
-          route.search(start, dest)
-        }
-
-        function boot() {
-          var p = qs()
-          var activeHtmlPath = (window.location && (window.location.pathname || window.location.href)) || 'unknown'
-          var gestureScript = document.getElementById('gestureScript')
-          var gestureScriptSrc = gestureScript ? (gestureScript.getAttribute('src') || gestureScript.src || '') : 'missing'
-          showVersionBadge('NEW-MAP-V1 | ' + activeHtmlPath)
-          window.updateMerchantGestureDebugPanel()
-          try {
-            console.log('[merchant-map-html-v1] active', activeHtmlPath)
-            console.log('[merchant-map-html-v1] gesture-script', gestureScriptSrc)
-            console.log('[merchant-map-html-v1] full-url', window.location && window.location.href ? window.location.href : '')
-          } catch (e) {}
-          var tk = p.tk || ''
-          if (!tk) {
-            showTip('缺少天地图TK')
+          if (!riderPos || !actualDest) {
+            setLoading(false)
+            showTip("导航坐标缺失")
+            setFallbackRoute()
             return
           }
-          var src = 'https://api.tianditu.gov.cn/api?v=4.0&tk=' + encodeURIComponent(tk)
-          loadScript(src)
-            .then(function () {
-              if (!window.T || !window.T.Map) {
-                showTip('天地图加载失败')
-                return
-              }
-              initMap(p)
-            })
-            .catch(function () {
-              showTip('天地图脚本加载失败')
-            })
+
+          try {
+            setLoading(true, "正在请求滴图路径规划...")
+            await requestRoute()
+            showTip(actualDest === customerPos ? "已切换为送达导航" : "已切换为取餐导航")
+          } catch (error) {
+            console.warn("[didi-map] route fallback", error)
+            showTip(error && error.message ? error.message : "路线获取失败，已使用直线兜底")
+            setFallbackRoute()
+          } finally {
+            setLoading(false)
+          }
         }
 
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', boot)
-        } else {
-          boot()
+        focusBtn.addEventListener("click", function () {
+          fixedCenterMode = true
+          renderMap(true)
+        })
+
+        freeBtn.addEventListener("click", function () {
+          fixedCenterMode = false
+          renderMap(true)
+        })
+
+        mapImage.onerror = function () {
+          if (Number.isFinite(lastRequestedZoom) && lastRequestedZoom > 4) {
+            showTip("静态地图缩放过大，正在自动重试...")
+            renderMap(true, lastRequestedZoom - 1)
+            return
+          }
+          showTip("滴图静态地图渲染失败")
         }
 
-        window.addEventListener('message', function (e) {
-          var d = e && e.data ? e.data : null
-          if (!d || !d.type) return
-          if (d.type === 'start_sim') {
-            startSim(d.intervalMs)
-          } else if (d.type === 'stop_sim') {
+        window.addEventListener("message", function (event) {
+          var payload = event && event.data ? event.data : null
+          if (!payload || !payload.type) return
+          if (payload.type === "start_sim") {
+            startSim(payload.intervalMs)
+          } else if (payload.type === "stop_sim") {
             stopSim()
-          } else if (d.type === 'rider_location') {
-            handleRiderLocationMessage(d)
+          } else if (payload.type === "rider_location") {
+            handleRiderLocationMessage(payload)
           }
         })
 
@@ -1021,17 +915,16 @@ pan method used: none</div>
           handleRiderLocationMessage(payload)
         }
 
-        window.addEventListener('beforeunload', function () {
-          clearFollowTimer()
-          if (gestureController && typeof gestureController.destroy === 'function') {
-            gestureController.destroy()
-            gestureController = null
-          }
-          if (simTimer) {
-            clearInterval(simTimer)
-            simTimer = null
-          }
+        window.addEventListener("beforeunload", function () {
+          stopSim()
+          if (queuedTimer) clearTimeout(queuedTimer)
         })
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", boot)
+        } else {
+          boot()
+        }
       })()
     </script>
   </body>

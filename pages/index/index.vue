@@ -5,11 +5,11 @@
       <view class="header-left">
         <text class="header-emoji">🛵</text>
         <view class="header-info">
-          <text class="header-title">骑手工作台</text>
-          <text class="header-sub">{{ nickname }}，今天也辛苦了</text>
+          <text class="header-title">{{ isMerchantDeliveryMode ? '自配送工作台' : '骑手工作台' }}</text>
+          <text class="header-sub">{{ isMerchantDeliveryMode ? `${nickname}，请处理本店配送订单` : `${nickname}，今天也辛苦了` }}</text>
         </view>
       </view>
-      <view class="status-switch" @click="toggleOnline">
+      <view v-if="!isMerchantDeliveryMode" class="status-switch" @click="toggleOnline">
         <text class="switch-text" :class="{ 'highlight-online': isOnline }">{{ isOnline ? '接单中' : '已休息' }}</text>
         <view class="switch-dot" :class="{online: isOnline}"></view>
       </view>
@@ -42,7 +42,7 @@
           <text class="menu-text">外卖订单</text>
           <text class="menu-badge" v-if="stats.pending > 0">{{ stats.pending }}</text>
         </view>
-        <view class="menu-item" @click="goErrands">
+        <view v-if="!isMerchantDeliveryMode" class="menu-item" @click="goErrands">
           <view class="menu-icon-wrap" style="background-color: #FFF7E6;">
             <text class="menu-icon">🏃</text>
           </view>
@@ -60,38 +60,8 @@
     </view>
 
     <view class="menu-section">
-      <view class="section-title-small">💰 订单收入统计</view>
-      <view class="menu-grid">
-        <view class="menu-item" @click="goEarnings">
-          <view class="menu-icon-wrap" style="background-color: #F6FFED;">
-            <text class="menu-icon">💰</text>
-          </view>
-          <text class="menu-text">订单收入汇总</text>
-        </view>
-        <view class="menu-item" @click="goWeekStats">
-          <view class="menu-icon-wrap" style="background-color: #FFF0F6;">
-            <text class="menu-icon">📈</text>
-          </view>
-          <text class="menu-text">本周统计</text>
-        </view>
-        <view class="menu-item" @click="goMonthStats">
-          <view class="menu-icon-wrap" style="background-color: #FCF0FF;">
-            <text class="menu-icon">📅</text>
-          </view>
-          <text class="menu-text">本月统计</text>
-        </view>
-      </view>
-    </view>
-
-    <view class="menu-section">
       <view class="section-title-small">🛠️ 我的服务</view>
       <view class="menu-grid">
-        <view class="menu-item" @click="goProfile">
-          <view class="menu-icon-wrap" style="background-color: #E6FFFB;">
-            <text class="menu-icon">👤</text>
-          </view>
-          <text class="menu-text">个人中心</text>
-        </view>
         <view v-if="showStationMessageEntry" class="menu-item" @click="goStationMessages">
           <view class="menu-icon-wrap" style="background-color: #FFF1F0;">
             <text class="menu-icon">💬</text>
@@ -99,57 +69,21 @@
           <text class="menu-text">跑腿代购消息</text>
           <text class="menu-badge" v-if="stationMessageUnread > 0">{{ formatBadgeCount(stationMessageUnread) }}</text>
         </view>
-        <view class="menu-item" @click="goSettings">
-          <view class="menu-icon-wrap" style="background-color: #FFF7E6;">
-            <text class="menu-icon">⚙️</text>
+        <view v-if="showMerchantAuditEntry" class="menu-item" @click="goMerchantAudit">
+          <view class="menu-icon-wrap" style="background-color: #F6FFED;">
+            <text class="menu-icon">🏪</text>
           </view>
-          <text class="menu-text">设置</text>
+          <text class="menu-text">商家入驻审核</text>
+          <text class="menu-badge" v-if="merchantAuditPending > 0">{{ formatBadgeCount(merchantAuditPending) }}</text>
         </view>
-        <view class="menu-item" @click="goHelp">
-          <view class="menu-icon-wrap" style="background-color: #F0F5FF;">
-            <text class="menu-icon">❓</text>
+        <view v-if="showRiderAuditEntry" class="menu-item" @click="goRiderAudit">
+          <view class="menu-icon-wrap" style="background-color: #F9F0FF;">
+            <text class="menu-icon">👤</text>
           </view>
-          <text class="menu-text">帮助中心</text>
+          <text class="menu-text">骑手审核</text>
+          <text class="menu-badge" v-if="riderAuditPending > 0">{{ formatBadgeCount(riderAuditPending) }}</text>
         </view>
       </view>
-    </view>
-
-    <!-- 待处理订单提醒 -->
-    <view class="section" v-if="pendingOrders.length > 0">
-      <view class="section-header">
-        <text class="section-title">配送任务</text>
-        <text class="section-action" @click="goOrders">查看全部</text>
-      </view>
-      <view class="order-card" v-for="order in pendingOrders.slice(0, 3)" :key="order.id" @click="goOrderDetail(order)">
-        <view class="order-top">
-          <view class="order-tags">
-            <text class="order-type" :class="{ 'town-type': isTownOrder(order) }">
-              {{ isTownOrder(order) ? '乡镇订单' : (order.type === 'takeout' ? '外卖' : '配送') }}
-            </text>
-            <text v-if="getTownName(order)" class="order-town">{{ getTownName(order) }}</text>
-          </view>
-          <text class="order-price">¥{{ order.rider_fee || 0 }}</text>
-        </view>
-        <view class="order-merchant">
-          <text class="merchant-icon">🏪</text>
-          <text class="merchant-text">{{ order.merchant?.name || '未知商家' }}</text>
-        </view>
-        <view class="order-addr">
-          <text class="addr-icon">📍</text>
-          <text class="addr-text">{{ getBriefAddress(order) }}</text>
-        </view>
-        <view class="order-bottom">
-          <text class="order-status" :class="{ 'town-status': isTownOrder(order) }">{{ getStatusText(order.status) }}</text>
-          <text class="order-time">{{ formatTime(order.created_at) }}</text>
-        </view>
-      </view>
-    </view>
-
-    <!-- 空状态 -->
-    <view class="empty-state" v-if="pendingOrders.length === 0 && isOnline">
-      <text class="empty-icon">☕</text>
-      <text class="empty-text">暂无待处理订单</text>
-      <text class="empty-tip">当前没有分配到你的配送任务</text>
     </view>
 
     <!-- 自定义确认弹窗 -->
@@ -179,13 +113,16 @@
 </template>
 
 <script>
-import { getRiderOrders, updateRiderStatus } from '@/api/order.js'
+import { getTownMerchantApplications } from '@/api/merchant-audit.js'
+import { getRiderOrders, getRiderTodaySummary, updateRiderStatus } from '@/api/order.js'
+import { getTownRiderApplications } from '@/api/rider-audit.js'
 import { getErrandList } from '@/api/errand.js'
 import { getTownErrandConversations } from '@/api/town-errand-message.js'
 import { getUserInfo } from '@/api/user.js'
 import { ORDER_STATUS } from '@/config/index.js'
+import { REMINDER_CENTER_EVENTS } from '@/utils/reminder-center.js'
+import { isCountyRider, isMerchantDeliveryUser, isTownScopeUser, isTownStationmaster } from '@/utils/rider-auth.js'
 import { getRiderStatus, getUserInfo as getStoredUserInfo, setRiderStatus } from '@/utils/storage.js'
-import { initSocket, onNewDelivery, disconnectSocket, offAllListeners } from '@/utils/socket.js'
 import { formatTime } from '@/utils/index.js'
 
 export default {
@@ -195,8 +132,8 @@ export default {
       nickname: '骑手',
       userProfile: null,
       stationMessageUnread: 0,
-      stationMessagePollTimer: null,
-      lastStationMessageUnread: null,
+      merchantAuditPending: 0,
+      riderAuditPending: 0,
       allOrders: [],
       errandOrders: [],
       stats: {
@@ -209,16 +146,42 @@ export default {
       // 确认弹窗相关
       showConfirmDialog: false,
       countdown: 5,
-      countdownTimer: null
+      countdownTimer: null,
+      reminderEventHandler: null,
+      orderRefreshHandler: null,
+      townUnreadHandler: null,
+      workbenchRefreshTimer: null
     }
   },
   computed: {
     pendingOrders() {
-      return this.allOrders.filter(o => [4, 5].includes(Number(o.status)))
+      const profile = this.userProfile || getStoredUserInfo() || {}
+      if (isMerchantDeliveryUser(profile)) {
+        return this.allOrders.filter(order => Number(order.status) === 3)
+      }
+      if (isTownStationmaster(profile) || isTownScopeUser(profile)) {
+        return this.allOrders.filter(order => this.canShowTownPendingOrder(order))
+      }
+      if (isCountyRider(profile)) {
+        return this.allOrders.filter(order => this.canShowCountyPendingOrder(order))
+      }
+      return []
+    },
+    isMerchantDeliveryMode() {
+      const profile = this.userProfile || getStoredUserInfo() || {}
+      return isMerchantDeliveryUser(profile)
     },
     showStationMessageEntry() {
       const profile = this.userProfile || {}
-      return profile.rider_kind === 'stationmaster' || profile.delivery_scope === 'town_delivery'
+      return !isMerchantDeliveryUser(profile) && isTownStationmaster(profile)
+    },
+    showMerchantAuditEntry() {
+      const profile = this.userProfile || {}
+      return !isMerchantDeliveryUser(profile) && isTownStationmaster(profile)
+    },
+    showRiderAuditEntry() {
+      const profile = this.userProfile || {}
+      return !isMerchantDeliveryUser(profile) && isTownStationmaster(profile)
     }
   },
   onLoad() {
@@ -228,22 +191,77 @@ export default {
     const storedUser = getStoredUserInfo()
     if (storedUser) {
       this.userProfile = storedUser
-      this.nickname = storedUser.nickname || '骑手'
+      this.nickname = storedUser.nickname || (isMerchantDeliveryUser(storedUser) ? '配送员' : '骑手')
     }
+    this.bindReminderEvents()
   },
-  onShow() {
-    this.initOrderSocket()
+  async onShow() {
+    const app = typeof getApp === 'function' ? getApp() : null
+    const refreshSession = app?.globalData?.refreshRiderSession
+    if (typeof refreshSession === 'function') {
+      try {
+        await refreshSession(false)
+      } catch (error) {
+        console.error('工作台刷新骑手会话失败', error)
+      }
+    }
     this.loadData()
   },
-  onHide() {
-    this.destroyOrderSocket()
-    this.stopStationMessagePolling()
-  },
   onUnload() {
-    this.destroyOrderSocket()
-    this.stopStationMessagePolling()
+    this.unbindReminderEvents()
+    if (this.workbenchRefreshTimer) {
+      clearTimeout(this.workbenchRefreshTimer)
+      this.workbenchRefreshTimer = null
+    }
   },
   methods: {
+    bindReminderEvents() {
+      if (!this.reminderEventHandler) {
+        this.reminderEventHandler = (payload = {}) => {
+          if (payload.type === 'station_notice') {
+            this.loadStationMessageSummary()
+          }
+        }
+      }
+      if (!this.orderRefreshHandler) {
+        this.orderRefreshHandler = () => {
+          if (this.workbenchRefreshTimer) {
+            clearTimeout(this.workbenchRefreshTimer)
+          }
+          this.workbenchRefreshTimer = setTimeout(() => {
+            Promise.all([
+              this.loadOrders(),
+              this.loadTodaySummary(),
+              this.loadErrands()
+            ]).then(() => {
+              this.calculateQueueStats()
+            })
+          }, 300)
+        }
+      }
+      if (!this.townUnreadHandler) {
+        this.townUnreadHandler = (payload = {}) => {
+          this.stationMessageUnread = Number(payload.unreadTotal || 0)
+        }
+      }
+      uni.$off(REMINDER_CENTER_EVENTS.reminder, this.reminderEventHandler)
+      uni.$off(REMINDER_CENTER_EVENTS.orderRefresh, this.orderRefreshHandler)
+      uni.$off(REMINDER_CENTER_EVENTS.townUnread, this.townUnreadHandler)
+      uni.$on(REMINDER_CENTER_EVENTS.reminder, this.reminderEventHandler)
+      uni.$on(REMINDER_CENTER_EVENTS.orderRefresh, this.orderRefreshHandler)
+      uni.$on(REMINDER_CENTER_EVENTS.townUnread, this.townUnreadHandler)
+    },
+    unbindReminderEvents() {
+      if (this.reminderEventHandler) {
+        uni.$off(REMINDER_CENTER_EVENTS.reminder, this.reminderEventHandler)
+      }
+      if (this.orderRefreshHandler) {
+        uni.$off(REMINDER_CENTER_EVENTS.orderRefresh, this.orderRefreshHandler)
+      }
+      if (this.townUnreadHandler) {
+        uni.$off(REMINDER_CENTER_EVENTS.townUnread, this.townUnreadHandler)
+      }
+    },
     formatTime,
     formatBadgeCount(count) {
       return count > 99 ? '99+' : String(count)
@@ -251,30 +269,157 @@ export default {
     getStatusText(status) {
       return ORDER_STATUS[status]?.text || '未知状态'
     },
+    safeText(value) {
+      if (value === undefined || value === null) {
+        return ''
+      }
+      return String(value).trim()
+    },
+    toBoolean(value) {
+      return value === true || value === 1 || value === '1' || value === 'true'
+    },
+    isTransferOrder(order = {}) {
+      return this.toBoolean(order.is_transfer_order) || !!this.safeText(order.transfer_tag)
+    },
+    getTransferTag(order = {}) {
+      return this.safeText(order.transfer_tag) || (this.isTransferOrder(order) ? '转派单' : '')
+    },
+    getTransferToTownName(order = {}) {
+      const targetTown = order.transfer_to_town
+      if (targetTown && typeof targetTown === 'object') {
+        return this.safeText(
+          targetTown.area_name
+          || targetTown.town_name
+          || targetTown.label
+          || targetTown.name
+          || targetTown.value
+        )
+      }
+      return this.safeText(targetTown)
+    },
+    getTransferFromUserName(order = {}) {
+      const transferFromUser = order.transfer_from_user
+      if (transferFromUser && typeof transferFromUser === 'object') {
+        return this.safeText(
+          transferFromUser.nickname
+          || transferFromUser.real_name
+          || transferFromUser.name
+          || transferFromUser.username
+        )
+      }
+      return this.safeText(transferFromUser) || '县城司机'
+    },
+    getTransferWorkbenchText(order = {}) {
+      const targetTown = this.getTransferToTownName(order)
+      const fromUser = this.getTransferFromUserName(order)
+      const summary = this.safeText(order.transfer_chain_summary)
+      if (summary) {
+        return summary
+      }
+      if (targetTown) {
+        return `来源：${fromUser} · 目标乡镇：${targetTown}`
+      }
+      return `来源：${fromUser}`
+    },
     isTownOrder(order = {}) {
       return order.order_type === 'town' || order.delivery_scope === 'town_delivery' || !!this.getTownName(order)
     },
     getTownName(order = {}) {
-      return order.customer_town || order.town_name || order.rider_town || ''
+      return order.customer_town || order.town_name || order.rider_town || this.getTransferToTownName(order) || ''
+    },
+    normalizeIdentityValue(value) {
+      if (value === undefined || value === null || value === '') {
+        return ''
+      }
+      return String(value)
+    },
+    getCurrentRiderId() {
+      const profile = this.userProfile || getStoredUserInfo() || {}
+      return this.normalizeIdentityValue(profile.id || profile.user_id || profile.userId)
+    },
+    getOrderOwnerId(order = {}) {
+      return this.normalizeIdentityValue(order.rider_id || order.riderId || order.user_id || order.userId)
+    },
+    getOrderResponsibleId(order = {}) {
+      return this.normalizeIdentityValue(
+        order.current_responsible_user_id
+        || order.currentResponsibleUserId
+        || order.rider_id
+        || order.riderId
+      )
+    },
+    isOwnedByCurrentRider(order = {}) {
+      const currentRiderId = this.getCurrentRiderId()
+      const orderOwnerId = this.getOrderOwnerId(order)
+      return !!currentRiderId && !!orderOwnerId && currentRiderId === orderOwnerId
+    },
+    isTownPoolOrder(order = {}) {
+      if (!this.isTownOrder(order)) {
+        return false
+      }
+      const status = Number(order.status)
+      if (![3, 4].includes(status)) {
+        return false
+      }
+      return !this.getOrderResponsibleId(order)
+    },
+    canShowTownPendingOrder(order = {}) {
+      if (!this.isTownOrder(order) && !this.isTransferOrder(order)) {
+        return false
+      }
+      return this.isTownPoolOrder(order)
+    },
+    canShowCountyPendingOrder(order = {}) {
+      if (this.isTownOrder(order) || this.isTransferOrder(order)) {
+        return false
+      }
+      const status = Number(order.status)
+      return [4, 5].includes(status) && this.isOwnedByCurrentRider(order)
+    },
+    getPendingEmptyTip() {
+      const profile = this.userProfile || getStoredUserInfo() || {}
+      if (isTownStationmaster(profile)) {
+        return '当前没有本乡镇可见配送订单'
+      }
+      return '当前没有分配到你的配送任务'
     },
     
     async loadData() {
       await this.loadUserInfo()
-      await Promise.all([
-        this.loadOrders(),
-        this.loadErrands(),
-        this.loadStationMessageSummary(true)
-      ])
-      this.calculateStats()
-      this.startStationMessagePolling()
+      await this.loadOrders()
+      await this.loadTodaySummary()
+      await this.loadErrands()
+      this.calculateQueueStats()
+      this.loadWorkbenchSecondaryData()
+    },
+    async loadWorkbenchSecondaryData() {
+      const tasks = []
+      if (this.showStationMessageEntry) {
+        tasks.push(this.loadStationMessageSummary(true))
+      }
+      if (this.showMerchantAuditEntry) {
+        tasks.push(this.loadMerchantAuditSummary())
+      }
+      if (this.showRiderAuditEntry) {
+        tasks.push(this.loadRiderAuditSummary())
+      }
+      if (!tasks.length) {
+        return
+      }
+      await Promise.allSettled(tasks)
     },
     
     async loadUserInfo() {
       try {
-        const res = await getUserInfo()
+        const res = await getUserInfo({
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
         if (res.data) {
           this.userProfile = res.data
-          this.nickname = res.data.nickname || '骑手'
+          this.nickname = res.data.nickname || (isMerchantDeliveryUser(res.data) ? '配送员' : '骑手')
         }
       } catch (e) {
         console.error('加载用户信息失败', e)
@@ -283,8 +428,18 @@ export default {
     
     async loadOrders() {
       try {
-        const res = await getRiderOrders()
-        this.allOrders = res.data || []
+        const res = await getRiderOrders({}, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
+        let list = res.data || []
+        const profile = this.userProfile || getStoredUserInfo() || {}
+        if (!isMerchantDeliveryUser(profile)) {
+          list = list.filter(order => order.order_type !== 'supermarket')
+        }
+        this.allOrders = list
       } catch (e) {
         console.error('加载订单失败', e)
         this.allOrders = []
@@ -292,8 +447,17 @@ export default {
     },
     
     async loadErrands() {
+      if (this.isMerchantDeliveryMode) {
+        this.errandOrders = []
+        return
+      }
       try {
-        const res = await getErrandList({ status: 1 })
+        const res = await getErrandList({ status: 1 }, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
         this.errandOrders = res.data || []
       } catch (e) {
         console.error('加载跑腿订单失败', e)
@@ -303,11 +467,15 @@ export default {
     async loadStationMessageSummary(isFirstLoad = false) {
       if (!this.showStationMessageEntry) {
         this.stationMessageUnread = 0
-        this.lastStationMessageUnread = 0
         return
       }
       try {
-        const res = await getTownErrandConversations()
+        const res = await getTownErrandConversations({}, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
         const source = Array.isArray(res?.data)
           ? res.data
           : Array.isArray(res?.data?.list)
@@ -323,53 +491,138 @@ export default {
           const unread = Number(item.unread_count ?? item.unreadCount ?? item.unread_num ?? 0)
           return sum + (unread > 0 ? unread : 0)
         }, 0)
-        const previousUnread = this.lastStationMessageUnread
         this.stationMessageUnread = unreadTotal
-        this.lastStationMessageUnread = unreadTotal
       } catch (error) {
         console.error('加载站长消息未读数失败', error)
       }
     },
-    startStationMessagePolling() {
-      this.stopStationMessagePolling()
-      if (!this.showStationMessageEntry) {
+    async loadMerchantAuditSummary() {
+      if (!this.showMerchantAuditEntry) {
+        this.merchantAuditPending = 0
         return
       }
-      this.stationMessagePollTimer = setInterval(() => {
-        this.loadStationMessageSummary(false)
-      }, 3000)
+      try {
+        const res = await getTownMerchantApplications({
+          status: 'pending',
+          page: 1,
+          page_size: 1
+        }, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
+        const payload = res?.data ?? res ?? {}
+        const list = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.list)
+            ? payload.list
+            : Array.isArray(payload?.rows)
+              ? payload.rows
+              : Array.isArray(payload?.data)
+                ? payload.data
+                : []
+        const total = Number(
+          payload?.summary?.pending_count
+          ?? payload?.stats?.pending_count
+          ?? payload?.pending_count
+          ?? payload?.total
+          ?? payload?.meta?.total
+          ?? payload?.pagination?.total
+          ?? list.length
+        )
+        this.merchantAuditPending = Number.isFinite(total) ? total : list.length
+      } catch (error) {
+        console.error('加载商家入驻待审核数失败', error)
+        this.merchantAuditPending = 0
+      }
     },
-    stopStationMessagePolling() {
-      if (this.stationMessagePollTimer) {
-        clearInterval(this.stationMessagePollTimer)
-        this.stationMessagePollTimer = null
+    async loadRiderAuditSummary() {
+      if (!this.showRiderAuditEntry) {
+        this.riderAuditPending = 0
+        return
+      }
+      try {
+        const res = await getTownRiderApplications({
+          status: 'pending',
+          page: 1,
+          page_size: 1
+        }, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
+        const payload = res?.data ?? res ?? {}
+        const list = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.list)
+            ? payload.list
+            : Array.isArray(payload?.rows)
+              ? payload.rows
+              : Array.isArray(payload?.data)
+                ? payload.data
+                : []
+        const total = Number(
+          payload?.summary?.pending_count
+          ?? payload?.stats?.pending_count
+          ?? payload?.pending_count
+          ?? payload?.total
+          ?? payload?.meta?.total
+          ?? payload?.pagination?.total
+          ?? list.length
+        )
+        this.riderAuditPending = Number.isFinite(total) ? total : list.length
+      } catch (error) {
+        console.error('加载骑手待审核数失败', error)
+        this.riderAuditPending = 0
+      }
+    },
+    async loadTodaySummary() {
+      try {
+        const res = await getRiderTodaySummary({}, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        })
+        const summary = res?.data || {}
+        this.stats.todayDone = Number(
+          summary.today_completed_orders
+          ?? summary.todayDone
+          ?? summary.completed_orders
+          ?? 0
+        )
+        this.stats.delivering = Number(
+          summary.today_delivering_orders
+          ?? summary.todayDeliveringOrders
+          ?? summary.delivering_orders
+          ?? 0
+        )
+        this.stats.todayEarning = (parseFloat(
+          summary.today_rider_income
+          ?? summary.today_settled_income
+          ?? summary.todayIncome
+          ?? 0
+        ) || 0).toFixed(2)
+      } catch (error) {
+        console.error('加载今日订单统计失败', error)
+        this.stats.todayDone = 0
+        this.stats.delivering = 0
+        this.stats.todayEarning = '0.00'
       }
     },
     
-    calculateStats() {
-      const today = new Date().toISOString().slice(0, 10)
-      
-      // 统计外卖订单
-      const todayDoneList = this.allOrders.filter(o => 
-        o.status === 6 && 
-        o.delivered_at && 
-        o.delivered_at.startsWith(today)
-      )
-      
-      const deliveringList = this.allOrders.filter(o => o.status === 5)
-      
-      this.stats.todayDone = todayDoneList.length
-      this.stats.delivering = deliveringList.length
-      this.stats.todayEarning = todayDoneList.reduce((sum, o) => {
-        return sum + (parseFloat(o.rider_fee) || 0)
-      }, 0).toFixed(2)
+    calculateQueueStats() {
       this.stats.pending = this.pendingOrders.length
-      
-      // 统计跑腿订单
       this.stats.errandPending = this.errandOrders.length
     },
     
     async toggleOnline() {
+      if (this.isMerchantDeliveryMode) {
+        uni.showToast({ title: '自配送员无需切换接单状态', icon: 'none' })
+        return
+      }
       // 如果是从接单中切换到休息，弹出确认框
       if (this.isOnline) {
         this.showConfirmDialog = true
@@ -440,72 +693,41 @@ export default {
         return order.address || '未知地址'
       }
     },
-    initOrderSocket() {
-      const token = uni.getStorageSync('token') || ''
-      if (!token) {
-        return
-      }
-      initSocket(token)
-      offAllListeners()
-      onNewDelivery(async (payload = {}) => {
-        const order = payload.data || {}
-        if (!order.id) {
-          return
-        }
-        uni.showToast({
-          title: this.isTownOrder(order) ? '收到乡镇配送任务' : '收到新的配送任务',
-          icon: 'none',
-          duration: 2000
-        })
-        await this.loadOrders()
-        this.calculateStats()
-      })
-    },
-    destroyOrderSocket() {
-      offAllListeners()
-      disconnectSocket()
-    },
-    
     goOrders() {
-      // orders 是 tabbar 页面，需要用 switchTab
-      uni.switchTab({ url: '/pages/orders/index' })
+      uni.navigateTo({ url: '/pages/orders/index' })
     },
     
     goErrands() {
+      if (this.isMerchantDeliveryMode) {
+        return
+      }
       uni.navigateTo({ url: '/pages/errands/index' })
     },
     
     goTodayOrders() {
-      uni.switchTab({ url: '/pages/orders/index' })
+      uni.navigateTo({ url: '/pages/today-orders/index' })
     },
     
-    goEarnings() {
-      uni.navigateTo({ url: '/pages/earnings/index' })
-    },
-    
-    goWeekStats() {
-      uni.navigateTo({ url: '/pages/earnings/index?period=week' })
-    },
-    
-    goMonthStats() {
-      uni.navigateTo({ url: '/pages/earnings/index?period=month' })
-    },
-    
-    goProfile() {
-      // profile 是 tabbar 页面，需要用 switchTab
-      uni.switchTab({ url: '/pages/profile/index' })
-    },
-
     goStationMessages() {
+      if (!this.showStationMessageEntry) {
+        uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
+        return
+      }
       uni.navigateTo({ url: '/pages/station-messages/index' })
     },
-    
-    goSettings() {
-      uni.showToast({ title: '设置功能开发中', icon: 'none' })
+    goMerchantAudit() {
+      if (!this.showMerchantAuditEntry) {
+        uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
+        return
+      }
+      uni.navigateTo({ url: '/pages/merchant-audit/index' })
     },
-    
-    goHelp() {
-      uni.showToast({ title: '帮助中心开发中', icon: 'none' })
+    goRiderAudit() {
+      if (!this.showRiderAuditEntry) {
+        uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
+        return
+      }
+      uni.navigateTo({ url: '/pages/rider-audit/index' })
     },
     
     goOrderDetail(order) {
@@ -767,6 +989,14 @@ export default {
   font-size: 22rpx;
   color: #1f6f43;
   background: rgba(31, 111, 67, 0.12);
+  padding: 4rpx 12rpx;
+  border-radius: 6rpx;
+}
+
+.transfer-tag {
+  font-size: 22rpx;
+  color: #8a5a00;
+  background: #fff3cd;
   padding: 4rpx 12rpx;
   border-radius: 6rpx;
 }

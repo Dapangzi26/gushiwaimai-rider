@@ -57,6 +57,7 @@
 
 <script>
 import { getTownErrandMessages, sendTownErrandMessage } from '@/api/town-errand-message.js'
+import { isTownStationmaster } from '@/utils/rider-auth.js'
 import { getUserInfo as getStoredUserInfo } from '@/utils/storage.js'
 import { formatTime } from '@/utils/index.js'
 
@@ -91,6 +92,7 @@ function pickSenderRole(item = {}) {
 export default {
   data() {
     return {
+      hasPageAccess: false,
       conversationId: '',
       pageTitle: '会话详情',
       draft: '',
@@ -99,16 +101,22 @@ export default {
       messages: [],
       currentUserId: '',
       scrollAnchor: '',
-      messagePollTimer: null
+      messagePollTimer: null,
+      messagesLoading: false
     }
   },
   onLoad(options) {
+    this.hasPageAccess = this.ensurePageAccess()
     this.conversationId = options.id || ''
     this.pageTitle = decodeURIComponent(options.title || '会话详情')
     const storedUser = getStoredUserInfo()
     this.currentUserId = storedUser?.id || ''
   },
   onShow() {
+    this.hasPageAccess = this.ensurePageAccess()
+    if (!this.hasPageAccess) {
+      return
+    }
     this.initMessagePolling()
   },
   onHide() {
@@ -119,7 +127,26 @@ export default {
   },
   methods: {
     formatTime,
+    ensurePageAccess() {
+      const user = getStoredUserInfo() || {}
+      if (isTownStationmaster(user)) {
+        return true
+      }
+      this.stopMessagePolling()
+      uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
+      if (typeof uni.navigateBack === 'function') {
+        uni.navigateBack({
+          fail: () => {
+            uni.switchTab({ url: '/pages/index/index' })
+          }
+        })
+      }
+      return false
+    },
     async initMessagePolling() {
+      if (!this.hasPageAccess) {
+        return
+      }
       await this.loadMessages(true)
       this.startMessagePolling()
     },
@@ -132,13 +159,20 @@ export default {
       return senderRole === 'stationmaster' || senderRole === 'rider'
     },
     async loadMessages(showLoading = true) {
+      if (!this.hasPageAccess) {
+        return
+      }
       if (!this.conversationId) {
         uni.showToast({ title: '会话不存在', icon: 'none' })
+        return
+      }
+      if (this.messagesLoading) {
         return
       }
       if (showLoading) {
         this.loading = true
       }
+      this.messagesLoading = true
       try {
         const res = await getTownErrandMessages(this.conversationId)
         const source = pickList(res?.data ?? res)
@@ -155,10 +189,14 @@ export default {
         console.error('加载镇上跑腿代购消息失败', error)
         this.messages = []
       } finally {
+        this.messagesLoading = false
         this.loading = false
       }
     },
     startMessagePolling() {
+      if (!this.hasPageAccess) {
+        return
+      }
       this.stopMessagePolling()
       this.messagePollTimer = setInterval(() => {
         this.loadMessages(false)
@@ -180,6 +218,9 @@ export default {
       })
     },
     async handleSend() {
+      if (!this.hasPageAccess) {
+        return
+      }
       const content = String(this.draft || '').trim()
       if (!content || this.sending) {
         if (!content) {

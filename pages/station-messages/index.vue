@@ -39,6 +39,8 @@
 <script>
 import { getTownErrandConversations } from '@/api/town-errand-message.js'
 import { formatTime } from '@/utils/index.js'
+import { isTownStationmaster } from '@/utils/rider-auth.js'
+import { getUserInfo as getStoredUserInfo } from '@/utils/storage.js'
 
 function pickList(payload) {
   if (Array.isArray(payload)) return payload
@@ -78,12 +80,21 @@ function pickUnreadCount(item = {}) {
 export default {
   data() {
     return {
+      hasPageAccess: false,
       loading: false,
       conversations: [],
-      conversationPollTimer: null
+      conversationPollTimer: null,
+      conversationsLoading: false
     }
   },
+  onLoad() {
+    this.hasPageAccess = this.ensurePageAccess()
+  },
   onShow() {
+    this.hasPageAccess = this.ensurePageAccess()
+    if (!this.hasPageAccess) {
+      return
+    }
     this.initConversationPolling()
   },
   onHide() {
@@ -97,14 +108,40 @@ export default {
   },
   methods: {
     formatTime,
+    ensurePageAccess() {
+      const user = getStoredUserInfo() || {}
+      if (isTownStationmaster(user)) {
+        return true
+      }
+      this.stopConversationPolling()
+      uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
+      if (typeof uni.navigateBack === 'function') {
+        uni.navigateBack({
+          fail: () => {
+            uni.switchTab({ url: '/pages/index/index' })
+          }
+        })
+      }
+      return false
+    },
     async initConversationPolling() {
+      if (!this.hasPageAccess) {
+        return
+      }
       await this.loadConversations(true)
       this.startConversationPolling()
     },
     async loadConversations(showLoading = true) {
+      if (!this.hasPageAccess) {
+        return
+      }
+      if (this.conversationsLoading) {
+        return
+      }
       if (showLoading) {
         this.loading = true
       }
+      this.conversationsLoading = true
       try {
         const res = await getTownErrandConversations()
         const source = pickList(res?.data ?? res)
@@ -129,11 +166,15 @@ export default {
         console.error('加载镇上跑腿代购会话失败', error)
         this.conversations = []
       } finally {
+        this.conversationsLoading = false
         this.loading = false
         uni.stopPullDownRefresh()
       }
     },
     startConversationPolling() {
+      if (!this.hasPageAccess) {
+        return
+      }
       this.stopConversationPolling()
       this.conversationPollTimer = setInterval(() => {
         this.loadConversations(false)
@@ -146,6 +187,9 @@ export default {
       }
     },
     openConversation(item) {
+      if (!this.hasPageAccess) {
+        return
+      }
       const title = encodeURIComponent(item.userName || '会话详情')
       uni.navigateTo({
         url: `/pages/station-messages/detail?id=${item.id}&title=${title}`

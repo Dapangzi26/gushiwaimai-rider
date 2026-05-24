@@ -14,8 +14,19 @@ export function getAvailableOrders(params = {}) {
  * 获取我的配送订单
  * @param {object} params - 查询参数
  */
-export function getRiderOrders(params = {}) {
-  return get('/order/rider-orders', params)
+export function getRiderOrders(params = {}, options = {}) {
+  return get('/order/rider-orders', params, options)
+}
+
+export function acceptTakeoutOrder(orderId) {
+  return post('/order/accept-takeout', { order_id: orderId })
+}
+
+/**
+ * 获取骑手今日统计
+ */
+export function getRiderTodaySummary(params = {}, options = {}) {
+  return get('/rider/today-summary', params, options)
 }
 
 /**
@@ -23,6 +34,26 @@ export function getRiderOrders(params = {}) {
  */
 export function getOrderDetail(id) {
   return get('/order/detail/' + id)
+}
+
+export function getTransferStationmasters(params = {}) {
+  return get('/order/transfer/stationmasters', params)
+}
+
+export function submitOrderTransfer(data = {}) {
+  return post('/order/transfer/to-stationmaster', data)
+}
+
+export function revokeOrderTransfer(orderId) {
+  return post('/order/transfer/revoke', { order_id: orderId })
+}
+
+export function getTransferTownRiders(params = {}) {
+  return get('/order/transfer/town-riders', params)
+}
+
+export function submitOrderTransferToTownRider(data = {}) {
+  return post('/order/transfer/to-town-rider', data)
 }
 
 /**
@@ -48,4 +79,12 @@ export function confirmDeliverySpecial(orderId) {
  */
 export function updateRiderStatus(status) {
   return post('/order/rider-status', { status: status })
+}
+
+export function startMerchantSelfDelivery(orderId) {
+  return post('/order/deliver', { order_id: orderId })
+}
+
+export function confirmMerchantSelfDelivery(orderId) {
+  return post('/order/merchant-confirm-delivery', { order_id: orderId })
 }

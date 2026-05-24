@@ -1,8 +1,9 @@
 const NOTICE_TEXT = '您有跑腿消息，请及时回复'
-const NOTICE_COOLDOWN_MS = 3000
+const PLAYER_GAP_MS = 800
 const LOG_PREFIX = '[town-errand-voice]'
+const HIGH_PRIORITY_VALUES = ['high', 'urgent', 'critical', 'p0', 'p1']
 
-let lastSpeakAt = 0
+let lastPlayAt = 0
 let plusReadyListening = false
 let plusReadyCallbacks = []
 let androidTtsInstance = null
@@ -53,11 +54,33 @@ function showVisualNotice() {
   }
 }
 
-function fallbackToBeep(reason) {
-  logWarn('语音播报失败，降级为 beep', reason)
+function vibrateNotice() {
+  if (typeof uni.vibrateShort === 'function') {
+    uni.vibrateShort()
+  }
+}
+
+function isHighPriority(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return HIGH_PRIORITY_VALUES.includes(normalized)
+}
+
+function getBeepCountBySoundType(soundType = 'default') {
+  const normalized = String(soundType || '').trim().toLowerCase()
+  if (normalized === 'urgent' || normalized === 'alert_urgent' || normalized === 'critical') {
+    return 2
+  }
+  if (normalized === 'triple' || normalized === 'alert_triple') {
+    return 3
+  }
+  return 1
+}
+
+function playBeep(reason, soundType = 'default') {
+  logWarn('执行提示音提醒', reason)
   // #ifdef APP-PLUS
   if (typeof plus !== 'undefined' && plus.device && typeof plus.device.beep === 'function') {
-    plus.device.beep(1)
+    plus.device.beep(getBeepCountBySoundType(soundType))
     return true
   }
   // #endif
@@ -212,11 +235,11 @@ function ensureAndroidTtsReady(callback) {
   }
 }
 
-function speakWithAndroidTts() {
+function speakWithAndroidTts(text = NOTICE_TEXT) {
   try {
     // #ifdef APP-PLUS
     const TextToSpeech = plus.android.importClass('android.speech.tts.TextToSpeech')
-    const result = androidTtsInstance.speak(NOTICE_TEXT, TextToSpeech.QUEUE_FLUSH, null, 'town_errand_notice')
+    const result = androidTtsInstance.speak(String(text || NOTICE_TEXT), TextToSpeech.QUEUE_FLUSH, null, 'rider_reminder_notice')
     const errorCode = Number(TextToSpeech.ERROR)
 
     logInfo('已调用 Android TextToSpeech.speak', {
@@ -238,46 +261,88 @@ function speakWithAndroidTts() {
   return false
 }
 
-export function speakTownErrandIncomingMessage() {
-  const now = Date.now()
-  const interval = now - lastSpeakAt
-
-  logInfo('收到镇上跑腿代购语音播报请求', {
-    now,
-    lastSpeakAt,
-    interval
+function showTextToast(title = NOTICE_TEXT) {
+  const safeTitle = String(title || '').trim() || NOTICE_TEXT
+  uni.showToast({
+    title: safeTitle,
+    icon: 'none',
+    duration: 2000
   })
+}
 
-  if (lastSpeakAt > 0 && interval < NOTICE_COOLDOWN_MS) {
-    logWarn('命中 3 秒防重复播报，已跳过', {
-      interval,
-      cooldown: NOTICE_COOLDOWN_MS
+export function playReminderAlert(options = {}) {
+  const {
+    title = NOTICE_TEXT,
+    text = NOTICE_TEXT,
+    toast = true,
+    vibration = true,
+    sound = true,
+    voice = true,
+    soundType = 'default',
+    priority = 'normal'
+  } = options
+
+  const now = Date.now()
+  if (lastPlayAt > 0 && now - lastPlayAt < PLAYER_GAP_MS) {
+    logWarn('提醒播放过于频繁，已跳过本次播报', {
+      gap: now - lastPlayAt,
+      playerGapMs: PLAYER_GAP_MS
     })
     return false
   }
 
-  lastSpeakAt = now
-  showVisualNotice()
+  lastPlayAt = now
+
+  if (toast) {
+    showTextToast(title)
+  }
+  if (vibration) {
+    if (isHighPriority(priority) && typeof uni.vibrateLong === 'function') {
+      uni.vibrateLong()
+    } else {
+      vibrateNotice()
+    }
+  }
+  if (sound) {
+    playBeep({ title, soundType }, soundType)
+  }
+
+  if (!voice) {
+    return true
+  }
 
   if (!isAppPlusRuntime()) {
-    logWarn('当前为非 APP 环境，仅保留文字提示，不执行真机语音')
-    return false
+    logWarn('当前为非 APP 环境，仅保留文字/震动提示，不执行真机语音')
+    return true
   }
 
   ensurePlusReady(() => {
     ensureAndroidTtsReady((success, payload) => {
       if (!success) {
         logError('Android TTS 未就绪，无法执行语音播报', payload)
-        fallbackToBeep(payload)
+        if (!sound) {
+          playBeep(payload, soundType)
+        }
         return
       }
 
-      const speakSuccess = speakWithAndroidTts()
-      if (!speakSuccess) {
-        fallbackToBeep({ message: 'Android TTS speak 调用失败' })
+      const speakSuccess = speakWithAndroidTts(text)
+      if (!speakSuccess && !sound) {
+        playBeep({ message: 'Android TTS speak 调用失败' }, soundType)
       }
     })
   })
 
   return true
+}
+
+export function speakTownErrandIncomingMessage() {
+  return playReminderAlert({
+    title: NOTICE_TEXT,
+    text: NOTICE_TEXT,
+    toast: true,
+    vibration: true,
+    sound: true,
+    voice: true
+  })
 }
