@@ -1,4 +1,7 @@
 <script>
+// 这个文件是骑手端 App 的全局入口。
+// 这里统一处理登录会话、Socket 提醒中心、后台位置上报等全局任务；
+// 改这里会影响整个骑手端，所以位置上报这类后台任务要尽量稳，不能频繁打断前台接单流程。
 import { get, post } from '@/utils/request.js'
 import { wgs84ToGcj02 } from '@/utils/coord-transform.js'
 import { initReminderCenter, setReminderAppVisibility, stopReminderCenter, syncReminderCenterSession } from '@/utils/reminder-center.js'
@@ -14,6 +17,8 @@ let locationKickoffTimer = null
 let navigationLocationReportingActive = false
 let gcj02Unsupported = false
 let locationHintToastUntil = 0
+let locationTimeoutLogUntil = 0
+let lastHighAccuracyLocationTs = 0
 let sessionValidationPromise = null
 let validatedSessionToken = ''
 let validatedSessionUserId = ''
@@ -24,6 +29,12 @@ const ENABLE_DEBUG_EVENT_REPORT = false
 const LOCATION_DEBUG_SERVER_URL = 'http://192.168.1.9:7777/event'
 const LOCATION_DEBUG_SESSION_ID = 'station-location-timeout'
 const ENABLE_LOCATION_DEBUG_REPORT = false
+// 后台位置上报间隔。
+// 这里设成 20 秒，是为了减少手机高频定位导致的超时和耗电；
+// 调度台仍能看到骑手大概位置，接单和订单提醒不依赖这个秒级刷新。
+const LOCATION_REPORT_INTERVAL_MS = 20000
+const LOCATION_HIGH_ACCURACY_REFRESH_MS = 60000
+const LOCATION_TIMEOUT_LOG_INTERVAL_MS = 60000
 
 function reportSessionDebug(hypothesisId, location, msg, data = {}) {
   if (!ENABLE_DEBUG_EVENT_REPORT) {
@@ -108,6 +119,21 @@ function requestUniLocation(type = 'wgs84', extraOptions = {}) {
   })
 }
 
+function shouldRefreshHighAccuracyLocation() {
+  if (!hasFreshLocationSample(lastLocationSample, 30000)) {
+    return true
+  }
+  return Date.now() - lastHighAccuracyLocationTs >= LOCATION_HIGH_ACCURACY_REFRESH_MS
+}
+
+function shouldLogLocationTimeout() {
+  if (Date.now() < locationTimeoutLogUntil) {
+    return false
+  }
+  locationTimeoutLogUntil = Date.now() + LOCATION_TIMEOUT_LOG_INTERVAL_MS
+  return true
+}
+
 function isGcj02NotSupportedError(error) {
   const errMsg = String(error?.errMsg || error?.message || '')
   return errMsg.includes('not support gcj02')
@@ -145,6 +171,17 @@ function isNearlySameLocation(current = {}, previous = {}) {
   const latDiff = Math.abs(Number(current.latitude || 0) - Number(previous.latitude || 0))
   const lngDiff = Math.abs(Number(current.longitude || 0) - Number(previous.longitude || 0))
   return latDiff + lngDiff <= 0.00001
+}
+
+function hasFreshLocationSample(sample = {}, maxAgeMs = 120000) {
+  const sampleTs = Number(sample?.ts || 0)
+  if (!sampleTs) {
+    return false
+  }
+  if (!Number.isFinite(Number(sample?.latitude)) || !Number.isFinite(Number(sample?.longitude))) {
+    return false
+  }
+  return Date.now() - sampleTs <= maxAgeMs
 }
 
 function buildLocationFailureMeta(error) {
@@ -497,13 +534,13 @@ export default {
       }
 
       reportLocationDebug('A', 'App.vue:startLocationReport:started', '位置上报定时器已启动', {
-        interval_ms: 10000,
+        interval_ms: LOCATION_REPORT_INTERVAL_MS,
         role: storedUser.role || '',
         delivery_scope: storedUser.delivery_scope || '',
         rider_kind: storedUser.rider_kind || '',
         user_id: getUserId(storedUser)
       })
-      console.log('启动位置上报定时器，间隔 10 秒')
+      console.log('启动位置上报定时器，间隔 ' + LOCATION_REPORT_INTERVAL_MS / 1000 + ' 秒')
       locationTimer = setInterval(() => {
         const latestUser = getStoredUserInfo() || {}
         if (
@@ -515,7 +552,7 @@ export default {
           return
         }
         this.doReportLocation()
-      }, 10000)
+      }, LOCATION_REPORT_INTERVAL_MS)
       if (locationKickoffTimer) {
         clearTimeout(locationKickoffTimer)
         locationKickoffTimer = null
@@ -540,6 +577,71 @@ export default {
         console.log('位置上报定时器已停止')
       }
       locationReportInFlight = false
+    },
+    async reportLocationSample(sample = null) {
+      if (!sample || !Number.isFinite(sample.latitude) || !Number.isFinite(sample.longitude)) {
+        return null
+      }
+      const payload = {
+        latitude: sample.latitude,
+        longitude: sample.longitude
+      }
+      const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample)
+      console.log('位置上报请求体:', {
+        ...payload,
+        timestamp: sample.ts,
+        locationSource: sample.locationSource,
+        nearlySameAsLast
+      })
+      lastLocationSample = { ...sample }
+      if (this.globalData) {
+        this.globalData.latestRiderLocation = { ...sample }
+      }
+      const reportRes = await post('/rider/location/report', payload, {
+        background: true,
+        silent: true,
+        suppressAuthToast: true,
+        suppressErrorToast: true
+      }).catch(err => {
+        reportLocationDebug('D', 'App.vue:reportLocationSample:report-fail', '位置上报接口失败', {
+          errMsg: String(err?.message || err?.errMsg || ''),
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          locationSource: sample.locationSource || ''
+        })
+        console.log('真实位置上报接口失败:', err)
+        return null
+      })
+
+      if (reportRes?.data?.throttled) {
+        reportLocationDebug('D', 'App.vue:reportLocationSample:report-throttled', '位置已获取但后端限频忽略写入', {
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
+          locationSource: sample.locationSource || ''
+        })
+        console.warn('位置已获取，但后端本次限频忽略写入:', {
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
+          reason: '位置上报过于频繁，已忽略本次写入',
+          locationSource: sample.locationSource || ''
+        })
+      } else if (reportRes) {
+        reportLocationDebug('D', 'App.vue:reportLocationSample:report-ok', '位置已成功提交到后端', {
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
+          locationSource: sample.locationSource || ''
+        })
+        console.log('位置上报成功，已提交到后端:', {
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
+          locationSource: sample.locationSource || ''
+        })
+      }
+      return reportRes
     },
     doReportLocation() {
       const storedUser = getStoredUserInfo() || {}
@@ -568,38 +670,65 @@ export default {
           })
           let res = null
           let sample = null
-          if (!gcj02Unsupported) {
+          // 后台位置上报优先用普通精度快速拿点。
+          // 这类上报主要给调度台看骑手大概位置，不需要每 10 秒都抢一次高精度 GPS；
+          // 高频高精度调用容易和导航页、系统定位服务抢资源，最后就会刷 Position retrieval timed out。
+          if (!sample) {
             try {
-              reportLocationDebug('B', 'App.vue:doReportLocation:gcj02', '尝试 gcj02 定位', {
+              reportLocationDebug('B', 'App.vue:doReportLocation:wgs84-low-first', '先用 wgs84 普通精度快速定位', {
+                high_accuracy: false,
+                high_accuracy_expire_time: 15000
+              })
+              res = await requestUniLocation('wgs84', {
+                isHighAccuracy: false,
+                highAccuracyExpireTime: 15000
+              })
+              sample = normalizeReportLocation(res, requestTs, 'wgs84', 'wgs84_low_accuracy_first')
+            } catch (error) {
+              reportLocationDebug('B', 'App.vue:doReportLocation:wgs84-low-first-fail', 'wgs84 普通精度定位失败', {
+                errMsg: String(error?.errMsg || error?.message || '')
+              })
+              if (buildLocationFailureMeta(error).type !== 'timeout' || shouldLogLocationTimeout()) {
+                console.warn('wgs84 普通精度定位失败，准备尝试高精度定位:', error)
+              }
+            }
+          }
+          if (!sample && shouldRefreshHighAccuracyLocation() && !gcj02Unsupported) {
+            try {
+              reportLocationDebug('B', 'App.vue:doReportLocation:gcj02', '尝试 gcj02 高精度定位', {
                 high_accuracy: true
               })
               res = await requestUniLocation('gcj02')
-              sample = normalizeReportLocation(res, requestTs, 'gcj02', 'gcj02')
+              sample = normalizeReportLocation(res, requestTs, 'gcj02', 'gcj02_high_accuracy')
+              lastHighAccuracyLocationTs = Date.now()
             } catch (error) {
-              reportLocationDebug('B', 'App.vue:doReportLocation:gcj02-fail', 'gcj02 定位失败', {
+              reportLocationDebug('B', 'App.vue:doReportLocation:gcj02-fail', 'gcj02 高精度定位失败', {
                 errMsg: String(error?.errMsg || error?.message || ''),
                 unsupported: isGcj02NotSupportedError(error)
               })
               if (isGcj02NotSupportedError(error)) {
                 gcj02Unsupported = true
-                console.warn('当前环境不支持 gcj02，改用 wgs84 定位并本地转换为 gcj02 上报')
-              } else {
-                console.warn('gcj02 定位失败，改用 wgs84 定位兜底:', error)
+                console.warn('当前环境不支持 gcj02，后续改用 wgs84 定位并本地转换为 gcj02 上报')
+              } else if (buildLocationFailureMeta(error).type !== 'timeout' || shouldLogLocationTimeout()) {
+                console.warn('gcj02 高精度定位失败，准备改用 wgs84 高精度兜底:', error)
               }
             }
           }
-          if (!sample) {
+          if (!sample && shouldRefreshHighAccuracyLocation()) {
             try {
-              reportLocationDebug('B', 'App.vue:doReportLocation:wgs84-high', '尝试 wgs84 高精度定位', {
+              reportLocationDebug('B', 'App.vue:doReportLocation:wgs84-high', '尝试 wgs84 高精度定位补偿', {
                 high_accuracy: true
               })
               res = await requestUniLocation('wgs84')
               sample = normalizeReportLocation(res, requestTs, 'wgs84', 'wgs84_to_gcj02')
+              lastHighAccuracyLocationTs = Date.now()
             } catch (error) {
               reportLocationDebug('B', 'App.vue:doReportLocation:wgs84-high-fail', 'wgs84 高精度定位失败', {
                 errMsg: String(error?.errMsg || error?.message || '')
               })
-              console.warn('wgs84 高精度定位失败，改用普通定位兜底:', error)
+              if (buildLocationFailureMeta(error).type !== 'timeout' || shouldLogLocationTimeout()) {
+                console.warn('wgs84 高精度定位失败，继续走最近定位兜底:', error)
+              }
             }
           }
           if (!sample) {
@@ -638,61 +767,7 @@ export default {
             console.warn('本次定位结果无效，不上报旧点')
             return
           }
-
-          const payload = {
-            latitude: sample.latitude,
-            longitude: sample.longitude
-          }
-          console.log('位置上报请求体:', {
-            ...payload,
-            timestamp: sample.ts,
-            locationSource: sample.locationSource,
-            nearlySameAsLast
-          })
-          lastLocationSample = sample
-          if (this.globalData) {
-            this.globalData.latestRiderLocation = { ...sample }
-          }
-
-          const reportRes = await post('/rider/location/report', payload, {
-            background: true,
-            silent: true,
-            suppressAuthToast: true,
-            suppressErrorToast: true
-          }).catch(err => {
-            reportLocationDebug('D', 'App.vue:doReportLocation:report-fail', '位置上报接口失败', {
-              errMsg: String(err?.message || err?.errMsg || ''),
-              latitude: payload.latitude,
-              longitude: payload.longitude
-            })
-            console.log('真实位置上报接口失败:', err)
-            return null
-          })
-
-          if (reportRes?.data?.throttled) {
-            reportLocationDebug('D', 'App.vue:doReportLocation:report-throttled', '位置已获取但后端限频忽略写入', {
-              latitude: payload.latitude,
-              longitude: payload.longitude,
-              rider_location_updated_at: reportRes?.data?.rider_location_updated_at || ''
-            })
-            console.warn('位置已获取，但后端本次限频忽略写入:', {
-              latitude: payload.latitude,
-              longitude: payload.longitude,
-              rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
-              reason: '位置上报过于频繁，已忽略本次写入'
-            })
-          } else if (reportRes) {
-            reportLocationDebug('D', 'App.vue:doReportLocation:report-ok', '位置已成功提交到后端', {
-              latitude: payload.latitude,
-              longitude: payload.longitude,
-              rider_location_updated_at: reportRes?.data?.rider_location_updated_at || ''
-            })
-            console.log('位置上报成功，已提交到后端:', {
-              latitude: payload.latitude,
-              longitude: payload.longitude,
-              rider_location_updated_at: reportRes?.data?.rider_location_updated_at || ''
-            })
-          }
+          await this.reportLocationSample(sample)
         } catch (err) {
           const failureMeta = buildLocationFailureMeta(err)
           reportLocationDebug('E', 'App.vue:doReportLocation:catch', '位置上报总流程失败', {
@@ -701,8 +776,31 @@ export default {
             failure_text: failureMeta.text,
             failure_detail: failureMeta.detail
           })
+          if (failureMeta.type === 'timeout' && hasFreshLocationSample(lastLocationSample, 120000)) {
+            // 后台位置上报偶发超时时，优先复用最近一次有效定位，别把“定位超时”反复弹到前台界面。
+            // 对骑手来说，当前最需要的是界面稳定和持续可操作；只要最近 2 分钟内拿到过有效定位，
+            // 这里就用旧点先兜底上报，避免正常送单过程中不停被 toast 打断。
+            const fallbackSample = {
+              ...lastLocationSample,
+              ts: Date.now(),
+              locationSource: `${lastLocationSample.locationSource || 'cached'}_timeout_fallback`
+            }
+            console.warn('本次实时定位超时，已改为复用最近一次有效定位静默上报:', {
+              latitude: fallbackSample.latitude,
+              longitude: fallbackSample.longitude,
+              locationSource: fallbackSample.locationSource
+            })
+            await this.reportLocationSample(fallbackSample)
+            return
+          }
           console.warn(`[定位上报失败] ${failureMeta.text}: ${failureMeta.detail}`, err)
-          if (Date.now() >= locationHintToastUntil && failureMeta.type !== 'permission') {
+          // 后台位置上报超时属于系统定位波动，不该不停打断前台操作。
+          // 这里前台只保留“权限没开 / 系统定位没开”这类必须让骑手立刻处理的提示，
+          // 普通超时和未知失败只记控制台，不再弹屏。
+          if (
+            Date.now() >= locationHintToastUntil
+            && (failureMeta.type === 'permission' || failureMeta.type === 'service_disabled')
+          ) {
             locationHintToastUntil = Date.now() + 12000
             uni.showToast({
               title: failureMeta.text,

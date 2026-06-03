@@ -10,31 +10,9 @@ import { clearRiderSession } from './storage.js'
 
 const API_BASE_URL = BASE_URL + '/api'
 let logoutInProgress = false
-const DEBUG_SERVER_URL = 'http://198.18.0.1:7777/event'
-const DEBUG_SESSION_ID = 'rider-random-logout'
-const ENABLE_DEBUG_EVENT_REPORT = false
 
 function reportRequestDebug(hypothesisId, location, msg, data = {}) {
-  if (!ENABLE_DEBUG_EVENT_REPORT) {
-    return
-  }
-  // #region debug-point A:request-auth
-  uni.request({
-    url: DEBUG_SERVER_URL,
-    method: 'POST',
-    data: {
-      sessionId: DEBUG_SESSION_ID,
-      runId: 'pre-fix',
-      hypothesisId,
-      location,
-      msg: `[DEBUG] ${msg}`,
-      data,
-      ts: Date.now()
-    },
-    header: { 'Content-Type': 'application/json' },
-    fail: () => {}
-  })
-  // #endregion
+  return
 }
 
 function normalizeRoute(route = '') {
@@ -136,7 +114,6 @@ function request({
     const muteAllToast = silent || background || suppressToast
     const muteAuthToast = muteAllToast || suppressAuthToast
     const muteErrorToast = muteAllToast || suppressErrorToast
-
     uni.request({
       url: API_BASE_URL + url,
       method,
@@ -204,8 +181,7 @@ function request({
         }
         reject({ code: res.statusCode, msg })
       },
-      fail: (err) => {
-        console.error('网络请求失败:', err)
+      fail: () => {
         if (!muteErrorToast) {
           showToast('网络错误，请检查网络')
         }

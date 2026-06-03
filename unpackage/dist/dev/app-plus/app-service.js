@@ -139,9 +139,7 @@ if (uni.restoreGlobal) {
   const API_BASE_URL = BASE_URL + "/api";
   let logoutInProgress = false;
   function reportRequestDebug(hypothesisId, location2, msg, data = {}) {
-    {
-      return;
-    }
+    return;
   }
   function normalizeRoute$2(route = "") {
     if (!route) {
@@ -295,8 +293,7 @@ if (uni.restoreGlobal) {
           }
           reject({ code: res.statusCode, msg });
         },
-        fail: (err) => {
-          formatAppLog("error", "at utils/request.js:208", "网络请求失败:", err);
+        fail: () => {
           if (!muteErrorToast) {
             showToast("网络错误，请检查网络");
           }
@@ -1091,8 +1088,26 @@ if (uni.restoreGlobal) {
   function rejectTownMerchantApplication(id, data = {}) {
     return post(`/town-station/merchant-applications/${id}/reject`, data);
   }
+  const pendingSilentRiderOrdersRequests = /* @__PURE__ */ new Map();
+  function buildRiderOrdersDedupeKey(params = {}) {
+    return JSON.stringify(params || {});
+  }
+  function shouldDedupeSilentRiderOrders(options = {}) {
+    return !!(options.background || options.silent || options.suppressToast || options.suppressAuthToast || options.suppressErrorToast);
+  }
   function getRiderOrders(params = {}, options = {}) {
-    return get("/order/rider-orders", params, options);
+    if (!shouldDedupeSilentRiderOrders(options)) {
+      return get("/order/rider-orders", params, options);
+    }
+    const dedupeKey = buildRiderOrdersDedupeKey(params);
+    if (pendingSilentRiderOrdersRequests.has(dedupeKey)) {
+      return pendingSilentRiderOrdersRequests.get(dedupeKey);
+    }
+    const requestPromise = get("/order/rider-orders", params, options).finally(() => {
+      pendingSilentRiderOrdersRequests.delete(dedupeKey);
+    });
+    pendingSilentRiderOrdersRequests.set(dedupeKey, requestPromise);
+    return requestPromise;
   }
   function acceptTakeoutOrder(orderId) {
     return post("/order/accept-takeout", { order_id: orderId });
@@ -4994,8 +5009,24 @@ if (uni.restoreGlobal) {
   let socket = null;
   let socketToken = "";
   let currentSocketId = "";
+  let currentSocketTraceId = "";
+  let nativeSocketTask = null;
+  let nativeReconnectTimer = null;
+  let nativeConnectTimer = null;
+  let nativeReconnectAttempts = 0;
+  let nativeManualClose = false;
+  let nativeSocketGeneration = 0;
   const listenerRegistry = /* @__PURE__ */ new Map();
   const coreEventHandlers = /* @__PURE__ */ new Map();
+  const NATIVE_SOCKET_CONNECT_TIMEOUT_MS = 15e3;
+  const NATIVE_SOCKET_RECONNECT_MAX_ATTEMPTS = 20;
+  const NATIVE_SOCKET_RECONNECT_DELAY_MS = 1e3;
+  const NATIVE_SOCKET_RECONNECT_DELAY_MAX_MS = 3e4;
+  function reportSocketDebug(hypothesisId, msg, data = {}) {
+    {
+      return;
+    }
+  }
   const REMINDER_SOCKET_EVENTS = [
     "reminder_event",
     "new_delivery",
@@ -5024,11 +5055,11 @@ if (uni.restoreGlobal) {
       try {
         callback(payload, eventName);
       } catch (error) {
-        formatAppLog("error", "at utils/socket.js:41", `[socket] 事件监听执行失败: ${eventName}`, error);
+        formatAppLog("error", "at utils/socket.js:106", `[socket] 事件监听执行失败: ${eventName}`, error);
       }
     });
   }
-  function isAppPlatform$1() {
+  function isAppPlatform() {
     var _a;
     try {
       if (typeof uni !== "undefined" && typeof uni.getSystemInfoSync === "function") {
@@ -5044,17 +5075,55 @@ if (uni.restoreGlobal) {
   function sanitizeSocketUrl(url2) {
     return String(url2 || "").trim().replace(/^['"`]+|['"`]+$/g, "").replace(/\/+$/, "");
   }
+  function resolveSocketConnectUrl(baseUrl) {
+    const normalized = sanitizeSocketUrl(baseUrl);
+    if (!normalized) {
+      return "";
+    }
+    return normalized;
+  }
+  function buildNativeSocketUrl(baseUrl, bearer, traceId = "") {
+    const normalized = resolveSocketConnectUrl(baseUrl);
+    if (!normalized) {
+      return "";
+    }
+    const wsBaseUrl = normalized.replace(/^https:\/\//i, "wss://").replace(/^http:\/\//i, "ws://").replace(/\/+$/, "");
+    const query = [
+      "EIO=4",
+      "transport=websocket",
+      `token=${encodeURIComponent(bearer)}`,
+      "role=rider",
+      `debugTraceId=${encodeURIComponent(traceId || "")}`
+    ].join("&");
+    return `${wsBaseUrl}/socket.io/?${query}`;
+  }
   function buildSocketTransports() {
+    if (isAppPlatform()) {
+      return ["websocket"];
+    }
     return ["polling", "websocket"];
   }
-  function buildSocketOptions(token) {
+  function buildSocketQuery(bearer, traceId = "") {
+    return {
+      token: bearer,
+      role: "rider",
+      debugTraceId: traceId || ""
+    };
+  }
+  function buildSocketAuth(bearer) {
+    return { token: bearer };
+  }
+  function buildSocketOptions(token, traceId = "") {
     const bearer = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+    const appRuntime = isAppPlatform();
     const baseOptions = {
       path: "/socket.io",
-      auth: { token: bearer },
+      auth: buildSocketAuth(bearer),
       transports: buildSocketTransports(),
-      upgrade: true,
-      tryAllTransports: true,
+      // App 端这次改成 websocket 直连，不再走升级链。
+      // H5 仍保留原来的多传输兼容策略。
+      upgrade: !appRuntime,
+      tryAllTransports: !appRuntime,
       autoConnect: true,
       withCredentials: false,
       reconnection: true,
@@ -5063,17 +5132,310 @@ if (uni.restoreGlobal) {
       reconnectionDelayMax: 5e3,
       timeout: 6e4,
       forceNew: true,
-      rememberUpgrade: false,
-      query: {
-        token: bearer,
-        role: "rider"
-      },
-      extraHeaders: {
-        Authorization: bearer,
-        token: bearer
-      }
+      rememberUpgrade: appRuntime,
+      query: buildSocketQuery(bearer, traceId)
     };
     return baseOptions;
+  }
+  function clearNativeTimers() {
+    if (nativeConnectTimer) {
+      clearTimeout(nativeConnectTimer);
+      nativeConnectTimer = null;
+    }
+    if (nativeReconnectTimer) {
+      clearTimeout(nativeReconnectTimer);
+      nativeReconnectTimer = null;
+    }
+  }
+  function createNativeSocketFacade() {
+    return {
+      id: currentSocketId,
+      connected: false,
+      io: {
+        engine: {
+          transport: {
+            name: "websocket"
+          },
+          readyState: ""
+        },
+        on() {
+        }
+      },
+      nsp: "/",
+      connect() {
+        if (socketToken) {
+          createNativeSocket(socketToken, { reconnect: true });
+        }
+      },
+      disconnect() {
+        destroyNativeSocket();
+      },
+      emit(eventName, payload) {
+        if (!eventName) {
+          return false;
+        }
+        return sendNativeSocketPacket(`42${JSON.stringify([eventName, payload])}`);
+      },
+      on() {
+      },
+      off() {
+      }
+    };
+  }
+  function updateNativeSocketFacade(connected) {
+    var _a;
+    if (!socket) {
+      socket = createNativeSocketFacade();
+    }
+    socket.id = currentSocketId;
+    socket.connected = !!connected;
+    if ((_a = socket.io) == null ? void 0 : _a.engine) {
+      socket.io.engine.readyState = connected ? "open" : "closed";
+    }
+  }
+  function sendNativeSocketPacket(packet) {
+    if (!nativeSocketTask || !packet) {
+      return false;
+    }
+    try {
+      nativeSocketTask.send({
+        data: packet,
+        fail: (error) => {
+          formatAppLog("warn", "at utils/socket.js:282", "[socket:native] send failed", error);
+        }
+      });
+      return true;
+    } catch (error) {
+      formatAppLog("warn", "at utils/socket.js:287", "[socket:native] send exception", error);
+      return false;
+    }
+  }
+  function dispatchNativeConnect(socketId = "") {
+    nativeReconnectAttempts = 0;
+    clearNativeTimers();
+    currentSocketId = socketId || currentSocketId || "";
+    updateNativeSocketFacade(true);
+    formatAppLog("log", "at utils/socket.js:297", "[socket:native] connected", {
+      socketId: currentSocketId,
+      transport: "websocket"
+    });
+    formatAppLog("log", "at utils/socket.js:301", "Socket 已连接", {
+      socketId: currentSocketId,
+      transport: "websocket",
+      channel: "native"
+    });
+    dispatchEvent("connect", {
+      connected: true,
+      socketId: currentSocketId
+    });
+  }
+  function dispatchNativeConnectError(message, extra = {}) {
+    const errorPayload = {
+      message: message || "native websocket error",
+      description: extra.description || "",
+      context: extra.context || "",
+      type: extra.type || "NativeWebSocketError",
+      platform: "app",
+      transports: ["websocket"],
+      tokenLength: socketToken ? socketToken.length : 0,
+      baseUrl: BASE_URL
+    };
+    reportSocketDebug("A", "[DEBUG] rider native socket connect_error", {
+      ...errorPayload,
+      ...extra,
+      connected: !!(socket == null ? void 0 : socket.connected),
+      socketId: currentSocketId || ""
+    });
+    formatAppLog("error", "at utils/socket.js:329", "[socket:native] connect failed", errorPayload);
+    dispatchEvent("connect_error", errorPayload);
+  }
+  function scheduleNativeReconnect(reason = "") {
+    if (nativeManualClose || !socketToken) {
+      return;
+    }
+    if (nativeReconnectAttempts >= NATIVE_SOCKET_RECONNECT_MAX_ATTEMPTS) {
+      dispatchNativeConnectError("native websocket reconnect attempts exhausted", { reason });
+      return;
+    }
+    nativeReconnectAttempts += 1;
+    const baseDelay = Math.min(
+      NATIVE_SOCKET_RECONNECT_DELAY_MS * Math.pow(2, nativeReconnectAttempts - 1),
+      NATIVE_SOCKET_RECONNECT_DELAY_MAX_MS
+    );
+    const jitter = Math.floor(Math.random() * 1e3);
+    const delay = baseDelay + jitter;
+    clearNativeTimers();
+    nativeReconnectTimer = setTimeout(() => {
+      createNativeSocket(socketToken, { reconnect: true });
+    }, delay);
+  }
+  function handleNativeSocketMessage(rawData, bearer) {
+    var _a, _b;
+    const data = typeof rawData === "string" ? rawData : String(rawData || "");
+    if (!data) {
+      return;
+    }
+    const packetType = data.charAt(0);
+    if (packetType === "0") {
+      sendNativeSocketPacket(`40${JSON.stringify({ token: bearer })}`);
+      return;
+    }
+    if (data.startsWith("40")) {
+      const payloadText = data.slice(2);
+      let socketId = "";
+      if (payloadText) {
+        try {
+          socketId = ((_a = JSON.parse(payloadText)) == null ? void 0 : _a.sid) || "";
+        } catch (error) {
+        }
+      }
+      dispatchNativeConnect(socketId);
+      return;
+    }
+    if (packetType === "2") {
+      sendNativeSocketPacket("3");
+      return;
+    }
+    if (data.startsWith("42")) {
+      try {
+        const payload = JSON.parse(data.slice(2));
+        const eventName = payload == null ? void 0 : payload[0];
+        if (!eventName) {
+          return;
+        }
+        dispatchEvent(eventName, payload == null ? void 0 : payload[1]);
+      } catch (error) {
+        formatAppLog("warn", "at utils/socket.js:394", "[socket:native] event parse failed", error);
+      }
+      return;
+    }
+    if (data.startsWith("44")) {
+      let message = "Unauthorized";
+      try {
+        message = ((_b = JSON.parse(data.slice(2))) == null ? void 0 : _b.message) || message;
+      } catch (error) {
+      }
+      dispatchNativeConnectError(message, { packet: data });
+    }
+  }
+  function createNativeSocket(token, options = {}) {
+    const safeToken = String(token || "").trim();
+    if (!safeToken) {
+      return null;
+    }
+    const bearer = safeToken.startsWith("Bearer ") ? safeToken : `Bearer ${safeToken}`;
+    if (!options.reconnect) {
+      nativeReconnectAttempts = 0;
+    }
+    nativeManualClose = false;
+    currentSocketTraceId = currentSocketTraceId || `sock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const generation = nativeSocketGeneration + 1;
+    const socketUrl = buildNativeSocketUrl(BASE_URL, bearer, currentSocketTraceId);
+    if (!socketUrl || typeof uni === "undefined" || typeof uni.connectSocket !== "function") {
+      dispatchNativeConnectError("native websocket unavailable", { socketUrl });
+      return null;
+    }
+    nativeSocketGeneration = generation;
+    try {
+      if (nativeSocketTask && typeof nativeSocketTask.close === "function") {
+        nativeSocketTask.close({ code: 1e3, reason: "reconnect" });
+      }
+    } catch (error) {
+    }
+    clearNativeTimers();
+    updateNativeSocketFacade(false);
+    formatAppLog("log", "at utils/socket.js:437", "[socket:native] connecting", {
+      baseUrl: BASE_URL,
+      platform: "app",
+      reconnect: !!options.reconnect,
+      attempt: nativeReconnectAttempts,
+      transports: ["websocket"]
+    });
+    reportSocketDebug("A", "[DEBUG] rider native socket create", {
+      baseUrl: BASE_URL,
+      connectUrl: socketUrl.replace(/token=[^&]*/g, "token=***"),
+      platform: "app",
+      transports: ["websocket"],
+      reconnect: !!options.reconnect,
+      attempt: nativeReconnectAttempts,
+      hasToken: !!safeToken,
+      tokenLength: safeToken.length
+    });
+    nativeSocketTask = uni.connectSocket({
+      url: socketUrl,
+      complete: () => {
+      }
+    });
+    if (!nativeSocketTask || typeof nativeSocketTask.onOpen !== "function") {
+      dispatchNativeConnectError("native websocket task unavailable");
+      scheduleNativeReconnect("task_unavailable");
+      return socket;
+    }
+    nativeConnectTimer = setTimeout(() => {
+      var _a;
+      if (generation !== nativeSocketGeneration) {
+        return;
+      }
+      if (socket == null ? void 0 : socket.connected) {
+        return;
+      }
+      dispatchNativeConnectError("native websocket connect timeout");
+      try {
+        (_a = nativeSocketTask == null ? void 0 : nativeSocketTask.close) == null ? void 0 : _a.call(nativeSocketTask, { code: 1e3, reason: "connect_timeout" });
+      } catch (error) {
+      }
+      scheduleNativeReconnect("connect_timeout");
+    }, NATIVE_SOCKET_CONNECT_TIMEOUT_MS);
+    nativeSocketTask.onOpen(() => {
+      if (generation !== nativeSocketGeneration) {
+        return;
+      }
+    });
+    nativeSocketTask.onMessage((message = {}) => {
+      if (generation !== nativeSocketGeneration) {
+        return;
+      }
+      handleNativeSocketMessage(message.data, bearer);
+    });
+    nativeSocketTask.onError((error = {}) => {
+      if (generation !== nativeSocketGeneration) {
+        return;
+      }
+      updateNativeSocketFacade(false);
+      dispatchNativeConnectError((error == null ? void 0 : error.errMsg) || "native websocket error", { error });
+      scheduleNativeReconnect("error");
+    });
+    nativeSocketTask.onClose((event = {}) => {
+      if (generation !== nativeSocketGeneration) {
+        return;
+      }
+      const wasConnected = !!(socket == null ? void 0 : socket.connected);
+      clearNativeTimers();
+      updateNativeSocketFacade(false);
+      if (wasConnected) {
+        dispatchEvent("disconnect", {
+          connected: false,
+          reason: (event == null ? void 0 : event.reason) || (event == null ? void 0 : event.errMsg) || "native websocket closed"
+        });
+      }
+      scheduleNativeReconnect((event == null ? void 0 : event.reason) || (event == null ? void 0 : event.errMsg) || "close");
+    });
+    return socket;
+  }
+  function destroyNativeSocket() {
+    nativeManualClose = true;
+    nativeSocketGeneration += 1;
+    clearNativeTimers();
+    if (nativeSocketTask) {
+      try {
+        nativeSocketTask.close({ code: 1e3, reason: "manual_close" });
+      } catch (error) {
+      }
+      nativeSocketTask = null;
+    }
+    if (socket) {
+      socket.connected = false;
+    }
   }
   function cleanupCoreHandlers() {
     if (!socket) {
@@ -5081,7 +5443,9 @@ if (uni.restoreGlobal) {
       return;
     }
     coreEventHandlers.forEach((handler, eventName) => {
-      socket.off(eventName, handler);
+      if (typeof socket.off === "function") {
+        socket.off(eventName, handler);
+      }
     });
     coreEventHandlers.clear();
   }
@@ -5092,7 +5456,7 @@ if (uni.restoreGlobal) {
     const connectHandler = () => {
       var _a, _b, _c;
       currentSocketId = (socket == null ? void 0 : socket.id) || "";
-      formatAppLog("log", "at utils/socket.js:118", "Socket 已连接", {
+      formatAppLog("log", "at utils/socket.js:558", "Socket 已连接", {
         socketId: currentSocketId,
         transport: ((_c = (_b = (_a = socket == null ? void 0 : socket.io) == null ? void 0 : _a.engine) == null ? void 0 : _b.transport) == null ? void 0 : _c.name) || ""
       });
@@ -5102,19 +5466,36 @@ if (uni.restoreGlobal) {
       });
     };
     const disconnectHandler = (reason) => {
-      formatAppLog("log", "at utils/socket.js:129", "Socket 已断开", reason);
+      formatAppLog("log", "at utils/socket.js:569", "Socket 已断开", reason);
       dispatchEvent("disconnect", { connected: false, reason: reason || "" });
     };
     const connectErrorHandler = (error) => {
+      var _a, _b, _c, _d, _e, _f;
+      reportSocketDebug("A", "[DEBUG] rider socket connect_error", {
+        message: (error == null ? void 0 : error.message) || "",
+        description: (error == null ? void 0 : error.description) || "",
+        context: (error == null ? void 0 : error.context) || "",
+        type: (error == null ? void 0 : error.type) || "",
+        platform: isAppPlatform() ? "app" : "non-app",
+        transports: buildSocketTransports(),
+        connected: !!(socket == null ? void 0 : socket.connected),
+        socketId: (socket == null ? void 0 : socket.id) || "",
+        transportName: ((_c = (_b = (_a = socket == null ? void 0 : socket.io) == null ? void 0 : _a.engine) == null ? void 0 : _b.transport) == null ? void 0 : _c.name) || "",
+        readyState: ((_e = (_d = socket == null ? void 0 : socket.io) == null ? void 0 : _d.engine) == null ? void 0 : _e.readyState) || "",
+        uri: ((_f = socket == null ? void 0 : socket.io) == null ? void 0 : _f.uri) || "",
+        nsp: (socket == null ? void 0 : socket.nsp) || ""
+      });
       const errorPayload = {
         message: (error == null ? void 0 : error.message) || "",
         description: (error == null ? void 0 : error.description) || "",
         context: (error == null ? void 0 : error.context) || "",
         type: (error == null ? void 0 : error.type) || "",
+        platform: isAppPlatform() ? "app" : "non-app",
+        transports: buildSocketTransports(),
         tokenLength: socketToken ? socketToken.length : 0,
         baseUrl: BASE_URL
       };
-      formatAppLog("error", "at utils/socket.js:142", "Socket 连接失败", errorPayload);
+      formatAppLog("error", "at utils/socket.js:600", "Socket 连接失败", errorPayload);
       dispatchEvent("connect_error", errorPayload);
     };
     socket.on("connect", connectHandler);
@@ -5136,40 +5517,64 @@ if (uni.restoreGlobal) {
     if (!safeToken) {
       return null;
     }
-    const socketBaseUrl = sanitizeSocketUrl(BASE_URL);
-    formatAppLog("log", "at utils/socket.js:170", "[socket] 开始初始化连接", {
+    currentSocketTraceId = `sock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const socketBaseUrl = resolveSocketConnectUrl(BASE_URL);
+    if (isAppPlatform() && typeof uni !== "undefined" && typeof uni.connectSocket === "function") {
+      return createNativeSocket(safeToken);
+    }
+    formatAppLog("log", "at utils/socket.js:632", "[socket] 开始初始化连接", {
       baseUrl: BASE_URL,
       connectUrl: socketBaseUrl,
+      platform: isAppPlatform() ? "app" : "non-app",
       tokenLength: safeToken.length,
       hasToken: !!safeToken,
       transports: buildSocketTransports()
     });
-    socket = lookup(socketBaseUrl, buildSocketOptions(safeToken));
+    reportSocketDebug("A", "[DEBUG] rider socket create", {
+      baseUrl: BASE_URL,
+      connectUrl: socketBaseUrl,
+      platform: isAppPlatform() ? "app" : "non-app",
+      transports: buildSocketTransports(),
+      hasToken: !!safeToken,
+      tokenLength: safeToken.length
+    });
+    socket = lookup(socketBaseUrl, buildSocketOptions(safeToken, currentSocketTraceId));
+    socket.io.on("error", (managerError) => {
+      var _a, _b, _c, _d, _e;
+      reportSocketDebug("A", "[DEBUG] rider socket manager error", {
+        message: (managerError == null ? void 0 : managerError.message) || "",
+        description: (managerError == null ? void 0 : managerError.description) || "",
+        context: (managerError == null ? void 0 : managerError.context) || "",
+        type: (managerError == null ? void 0 : managerError.type) || "",
+        transportName: ((_c = (_b = (_a = socket == null ? void 0 : socket.io) == null ? void 0 : _a.engine) == null ? void 0 : _b.transport) == null ? void 0 : _c.name) || "",
+        readyState: ((_e = (_d = socket == null ? void 0 : socket.io) == null ? void 0 : _d.engine) == null ? void 0 : _e.readyState) || ""
+      });
+    });
     bindCoreListeners();
     return socket;
   }
   function destroySocket() {
+    destroyNativeSocket();
     if (socket) {
       cleanupCoreHandlers();
-      socket.disconnect();
+      if (typeof socket.disconnect === "function") {
+        socket.disconnect();
+      }
       socket = null;
     }
     socketToken = "";
     currentSocketId = "";
+    currentSocketTraceId = "";
   }
   function initSocket(token) {
     const safeToken = String(token || "").trim();
     if (!safeToken) {
-      formatAppLog("warn", "at utils/socket.js:196", "[socket] 跳过初始化：token 为空");
+      formatAppLog("warn", "at utils/socket.js:685", "[socket] 跳过初始化：token 为空");
       return null;
     }
-    if (isAppPlatform$1()) {
-      if (socket) {
-        destroySocket();
-      }
-      formatAppLog("log", "at utils/socket.js:204", "[socket] App 端已禁用实时 Socket，统一走 HTTP 轮询兜底");
-      return null;
-    }
+    formatAppLog("log", "at utils/socket.js:693", "[socket] 准备初始化实时 Socket 连接", {
+      platform: isAppPlatform() ? "app" : "non-app"
+    });
     if (socket && socketToken === safeToken) {
       if (!socket.connected && typeof socket.connect === "function") {
         socket.connect();
@@ -5614,25 +6019,14 @@ if (uni.restoreGlobal) {
   const TOWN_POLL_INTERVAL_FOREGROUND = 15e3;
   const TOWN_POLL_INTERVAL_BACKGROUND = 3e4;
   const DEDUPE_WINDOW_MS = 18e4;
+  const INITIAL_ORDER_REMINDER_WINDOW_MS = 9e4;
   const REMINDER_EVENT_NAME = "rider-reminder:event";
   const ORDER_REFRESH_EVENT_NAME = "rider-reminder:order-refresh";
   const TOWN_UNREAD_EVENT_NAME = "rider-reminder:town-unread";
   const SETTINGS_CHANGED_EVENT_NAME = "rider-reminder:settings-changed";
   const TIMEOUT_WARNING_LEVELS = [600, 180];
   const TAB_PAGE_PREFIXES = ["/pages/index/index", "/pages/profile/index"];
-  function isAppPlatform() {
-    var _a;
-    try {
-      if (typeof uni !== "undefined" && typeof uni.getSystemInfoSync === "function") {
-        const platform = String(((_a = uni.getSystemInfoSync()) == null ? void 0 : _a.uniPlatform) || "").toLowerCase();
-        if (platform === "app" || platform === "app-plus") {
-          return true;
-        }
-      }
-    } catch (error) {
-    }
-    return typeof plus !== "undefined";
-  }
+  const RIDER_NEW_ORDER_PLAYABLE_STATUSES = [2, 3, 4];
   const state = {
     initialized: false,
     appVisible: true,
@@ -5654,24 +6048,24 @@ if (uni.restoreGlobal) {
   };
   function logInfo(message, extra) {
     if (typeof extra === "undefined") {
-      formatAppLog("log", "at utils/reminder-center.js:59", LOG_PREFIX, message);
+      formatAppLog("log", "at utils/reminder-center.js:61", LOG_PREFIX, message);
       return;
     }
-    formatAppLog("log", "at utils/reminder-center.js:62", LOG_PREFIX, message, extra);
+    formatAppLog("log", "at utils/reminder-center.js:64", LOG_PREFIX, message, extra);
   }
   function logWarn(message, extra) {
     if (typeof extra === "undefined") {
-      formatAppLog("warn", "at utils/reminder-center.js:67", LOG_PREFIX, message);
+      formatAppLog("warn", "at utils/reminder-center.js:69", LOG_PREFIX, message);
       return;
     }
-    formatAppLog("warn", "at utils/reminder-center.js:70", LOG_PREFIX, message, extra);
+    formatAppLog("warn", "at utils/reminder-center.js:72", LOG_PREFIX, message, extra);
   }
   function logError(message, extra) {
     if (typeof extra === "undefined") {
-      formatAppLog("error", "at utils/reminder-center.js:75", LOG_PREFIX, message);
+      formatAppLog("error", "at utils/reminder-center.js:77", LOG_PREFIX, message);
       return;
     }
-    formatAppLog("error", "at utils/reminder-center.js:78", LOG_PREFIX, message, extra);
+    formatAppLog("error", "at utils/reminder-center.js:80", LOG_PREFIX, message, extra);
   }
   function normalizeRoute$1(route = "") {
     if (!route) {
@@ -5733,7 +6127,7 @@ if (uni.restoreGlobal) {
   function toBoolean$4(value2) {
     return value2 === true || value2 === 1 || value2 === "1" || value2 === "true";
   }
-  function safeText$4(value2) {
+  function safeText$6(value2) {
     if (value2 === void 0 || value2 === null) {
       return "";
     }
@@ -5743,7 +6137,7 @@ if (uni.restoreGlobal) {
     return String(value2).trim();
   }
   function safeId(value2) {
-    const text = safeText$4(value2);
+    const text = safeText$6(value2);
     return text || "";
   }
   function parseJsonMaybe(value2, fallback = {}) {
@@ -5776,11 +6170,13 @@ if (uni.restoreGlobal) {
     return void 0;
   }
   function normalizeReminderType(type = "") {
-    const normalized = safeText$4(type).toLowerCase();
+    const normalized = safeText$6(type).toLowerCase();
     if (!normalized) {
       return "";
     }
     const map = {
+      new_delivery: "new_order",
+      order_assigned: "new_order",
       rider_new_delivery: "new_order",
       rider_station_order_assigned: "new_order",
       rider_transfer_assigned: "transfer",
@@ -5805,12 +6201,12 @@ if (uni.restoreGlobal) {
     }
     return {};
   }
-  function getMerchantName(order = {}) {
+  function getMerchantName$1(order = {}) {
     var _a;
-    return safeText$4((_a = order == null ? void 0 : order.merchant) == null ? void 0 : _a.name) || "商家";
+    return safeText$6((_a = order == null ? void 0 : order.merchant) == null ? void 0 : _a.name) || "商家";
   }
   function isTransferOrder(order = {}) {
-    return toBoolean$4(order.is_transfer_order) || !!safeText$4(order.transfer_tag);
+    return toBoolean$4(order.is_transfer_order) || !!safeText$6(order.transfer_tag);
   }
   function pickUnreadCount$1(item = {}) {
     const unread = item.unread_count ?? item.unreadCount ?? item.unread_num;
@@ -5893,14 +6289,77 @@ if (uni.restoreGlobal) {
       id: safeId(order.id),
       status: Number(order.status || 0),
       isTransferOrder: isTransferOrder(order),
-      transferStatus: safeText$4(order.transfer_status),
-      transferTag: safeText$4(order.transfer_tag),
+      transferStatus: safeText$6(order.transfer_status),
+      transferTag: safeText$6(order.transfer_tag),
       transferToUserId: safeId(((_a = order == null ? void 0 : order.transfer_to_user) == null ? void 0 : _a.id) || ((_b = order == null ? void 0 : order.transfer_to_user) == null ? void 0 : _b.user_id) || (order == null ? void 0 : order.transfer_to_user_id)),
       transferFromUserId: safeId(((_c = order == null ? void 0 : order.transfer_from_user) == null ? void 0 : _c.id) || ((_d = order == null ? void 0 : order.transfer_from_user) == null ? void 0 : _d.user_id) || (order == null ? void 0 : order.transfer_from_user_id)),
       timeoutBucket: getTimeoutBucket(order),
-      updatedAt: safeText$4(order.updated_at || order.transfer_updated_at || order.status_updated_at || order.modified_at || ""),
+      updatedAt: safeText$6(order.updated_at || order.transfer_updated_at || order.status_updated_at || order.modified_at || ""),
       merchantReady: isActionableMerchantReady(order)
     };
+  }
+  function shouldReplayInitialPoolReminder(order = {}, snapshot = {}) {
+    if (Number(order.rider_id || 0) > 0) {
+      return false;
+    }
+    if (!RIDER_NEW_ORDER_PLAYABLE_STATUSES.includes(Number(snapshot.status || 0))) {
+      return false;
+    }
+    const freshnessTs = parseTimeValue(
+      order.accepted_at || order.status_updated_at || order.transfer_updated_at || order.created_at
+    );
+    if (!freshnessTs) {
+      return false;
+    }
+    const ageMs = Date.now() - freshnessTs;
+    return ageMs >= 0 && ageMs <= INITIAL_ORDER_REMINDER_WINDOW_MS;
+  }
+  function shouldPlayNewPoolReminder(order = {}, snapshot = {}) {
+    if (isTransferOrder(order)) {
+      return true;
+    }
+    if (Number(order.rider_id || 0) > 0) {
+      return false;
+    }
+    return RIDER_NEW_ORDER_PLAYABLE_STATUSES.includes(Number(snapshot.status || 0));
+  }
+  function pickReminderOrder(reminder = {}) {
+    const meta = (reminder == null ? void 0 : reminder.meta) || {};
+    const payload = (meta == null ? void 0 : meta.payload) || {};
+    const extra = (meta == null ? void 0 : meta.extra) || {};
+    const candidates = [
+      reminder.order,
+      meta.order,
+      pickOrder(payload),
+      pickOrder(extra)
+    ];
+    return candidates.find((item = {}) => {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      return item.id || item.order_no || item.status || item.order_status || item.orderStatus;
+    }) || {};
+  }
+  function pickReminderOrderStatus(reminder = {}) {
+    const order = pickReminderOrder(reminder);
+    const meta = (reminder == null ? void 0 : reminder.meta) || {};
+    const payload = (meta == null ? void 0 : meta.payload) || {};
+    const extra = (meta == null ? void 0 : meta.extra) || {};
+    const rawStatus = order.status ?? payload.status ?? payload.order_status ?? payload.orderStatus ?? extra.status ?? extra.order_status ?? extra.orderStatus;
+    const status = Number(rawStatus);
+    return Number.isFinite(status) ? status : 0;
+  }
+  function shouldBlockNewOrderVoice(reminder = {}) {
+    const type = normalizeReminderType(reminder.type);
+    if (type !== "new_order") {
+      return false;
+    }
+    const order = pickReminderOrder(reminder);
+    if (isTransferOrder(order) || normalizeReminderType(reminder.rawEventType) === "transfer") {
+      return false;
+    }
+    const status = pickReminderOrderStatus(reminder);
+    return !RIDER_NEW_ORDER_PLAYABLE_STATUSES.includes(status);
   }
   function buildOrdersIndexTarget(scene, orderId = "") {
     const params = [];
@@ -5922,7 +6381,7 @@ if (uni.restoreGlobal) {
     };
   }
   function appendQueryParams(url2 = "", params = {}) {
-    const safeUrl = safeText$4(url2);
+    const safeUrl = safeText$6(url2);
     if (!safeUrl) {
       return "";
     }
@@ -5934,7 +6393,7 @@ if (uni.restoreGlobal) {
     return `${safeUrl}${safeUrl.includes("?") ? "&" : "?"}${query}`;
   }
   function normalizeJumpPath(path = "") {
-    const safePath = safeText$4(path);
+    const safePath = safeText$6(path);
     if (!safePath) {
       return "";
     }
@@ -5976,7 +6435,7 @@ if (uni.restoreGlobal) {
     });
   }
   function shouldSkipReminder(reminder = {}) {
-    const key = safeText$4(reminder.dedupeKey);
+    const key = safeText$6(reminder.dedupeKey);
     if (!key) {
       return false;
     }
@@ -6015,10 +6474,10 @@ if (uni.restoreGlobal) {
           return;
         }
         plus.push.createMessage(
-          safeText$4(reminder.body || reminder.text || reminder.title),
+          safeText$6(reminder.body || reminder.text || reminder.title),
           JSON.stringify(payload),
           {
-            title: safeText$4(reminder.title || "骑手提醒"),
+            title: safeText$6(reminder.title || "骑手提醒"),
             cover: false,
             delay: false
           }
@@ -6042,7 +6501,7 @@ if (uni.restoreGlobal) {
     }
   }
   function isTabPageUrl(url2 = "") {
-    const safeUrl = safeText$4(url2);
+    const safeUrl = safeText$6(url2);
     if (!safeUrl) {
       return false;
     }
@@ -6103,15 +6562,23 @@ if (uni.restoreGlobal) {
           return;
         }
         if ((payload == null ? void 0 : payload.target) && (payload == null ? void 0 : payload.reminderType)) {
+          const extraPayload = parseJsonMaybe(payload == null ? void 0 : payload.extra, {});
+          const order = pickOrder(payload);
           handleReminder({
-            type: safeText$4(payload.reminderType),
-            title: safeText$4((message == null ? void 0 : message.title) || (payload == null ? void 0 : payload.title) || "骑手通知"),
-            text: safeText$4((message == null ? void 0 : message.content) || (payload == null ? void 0 : payload.text) || ""),
-            body: safeText$4((message == null ? void 0 : message.content) || (payload == null ? void 0 : payload.text) || ""),
+            type: safeText$6(payload.reminderType),
+            title: safeText$6((message == null ? void 0 : message.title) || (payload == null ? void 0 : payload.title) || "骑手通知"),
+            text: safeText$6((message == null ? void 0 : message.content) || (payload == null ? void 0 : payload.text) || ""),
+            body: safeText$6((message == null ? void 0 : message.content) || (payload == null ? void 0 : payload.text) || ""),
             target: payload.target,
-            dedupeKey: safeText$4((payload == null ? void 0 : payload.dedupeKey) || ""),
-            soundType: safeText$4((payload == null ? void 0 : payload.soundType) || "default"),
-            priority: safeText$4((payload == null ? void 0 : payload.priority) || "normal")
+            dedupeKey: safeText$6((payload == null ? void 0 : payload.dedupeKey) || ""),
+            soundType: safeText$6((payload == null ? void 0 : payload.soundType) || "default"),
+            priority: safeText$6((payload == null ? void 0 : payload.priority) || "normal"),
+            meta: {
+              payload,
+              order,
+              extra: extraPayload,
+              eventName: "push_receive"
+            }
           }, { source: "push:receive" });
         }
       });
@@ -6119,7 +6586,7 @@ if (uni.restoreGlobal) {
     });
   }
   function buildReminderFromUnifiedEvent(payload = {}) {
-    const targetRole = safeText$4(payload.target_role).toLowerCase();
+    const targetRole = safeText$6(payload.target_role).toLowerCase();
     if (targetRole && targetRole !== "rider") {
       return null;
     }
@@ -6129,11 +6596,11 @@ if (uni.restoreGlobal) {
     const orderId = safeId(
       order.id || extraPayload.order_id || jumpParams.id || jumpParams.orderId || jumpParams.order_id
     );
-    const eventType = safeText$4(payload.event_type);
+    const eventType = safeText$6(payload.event_type);
     const normalizedType = normalizeReminderType(eventType);
-    const speechText = safeText$4(payload.speech_text);
-    const content = safeText$4(payload.content);
-    const title = safeText$4(payload.title) || "骑手提醒";
+    const speechText = safeText$6(payload.speech_text);
+    const content = safeText$6(payload.content);
+    const title = safeText$6(payload.title) || "骑手提醒";
     const text = speechText || content || title;
     return {
       type: normalizedType || "station_notice",
@@ -6142,11 +6609,11 @@ if (uni.restoreGlobal) {
       title,
       text,
       body: content || text,
-      dedupeKey: safeText$4(payload.dedupe_key) || `${normalizedType || eventType}:${orderId || title}:${safeText$4(payload.created_at)}`,
+      dedupeKey: safeText$6(payload.dedupe_key) || `${normalizedType || eventType}:${orderId || title}:${safeText$6(payload.created_at)}`,
       target: buildTargetFromJump(payload.jump_path, jumpParams, orderId),
-      soundType: safeText$4(payload.sound_type || "default"),
-      priority: safeText$4(payload.priority || "normal"),
-      eventVersion: safeText$4(payload.event_version),
+      soundType: safeText$6(payload.sound_type || "default"),
+      priority: safeText$6(payload.priority || "normal"),
+      eventVersion: safeText$6(payload.event_version),
       meta: {
         payload,
         order,
@@ -6162,22 +6629,25 @@ if (uni.restoreGlobal) {
     }
     const order = pickOrder(payload);
     const orderId = safeId(order.id);
-    const eventType = safeText$4(pickPayloadValue(payload, "eventType", "event_type"));
+    const eventType = safeText$6(pickPayloadValue(payload, "eventType", "event_type"));
     const normalizedType = normalizeReminderType(eventType);
-    const speechText = safeText$4(pickPayloadValue(payload, "speechText", "speech_text"));
-    const socketMessage = safeText$4(pickPayloadValue(payload, "message", "content"));
-    const socketTitle = safeText$4(payload.title);
-    const soundType = safeText$4(pickPayloadValue(payload, "soundType", "sound_type") || "default");
-    const priority = safeText$4(payload.priority || "normal");
-    const jumpPath = safeText$4(pickPayloadValue(payload, "jumpPath", "jump_path"));
+    const speechText = safeText$6(pickPayloadValue(payload, "speechText", "speech_text"));
+    const socketMessage = safeText$6(pickPayloadValue(payload, "message", "content"));
+    const socketTitle = safeText$6(payload.title);
+    const soundType = safeText$6(pickPayloadValue(payload, "soundType", "sound_type") || "default");
+    const priority = safeText$6(payload.priority || "normal");
+    const jumpPath = safeText$6(pickPayloadValue(payload, "jumpPath", "jump_path"));
     const jumpParams = pickPayloadValue(payload, "jumpParams", "jump_params");
-    const dedupeKey = safeText$4(pickPayloadValue(payload, "dedupeKey", "dedupe_key"));
-    const timestamp = safeText$4(pickPayloadValue(payload, "timestamp", "created_at"));
+    const dedupeKey = safeText$6(pickPayloadValue(payload, "dedupeKey", "dedupe_key"));
+    const timestamp = safeText$6(pickPayloadValue(payload, "timestamp", "created_at"));
     if (eventName === "new_delivery" || eventName === "order_assigned") {
       const transfer = isTransferOrder(order);
+      if (!shouldPlayNewPoolReminder(order, buildOrderSnapshot(order))) {
+        return null;
+      }
       const type = normalizedType || (transfer ? "transfer" : "new_order");
       const fallbackTitle = transfer ? "收到转派订单" : "收到新派单";
-      const fallbackText = transfer ? `订单${safeText$4(order.order_no || orderId)}已转到你这里，请尽快处理` : `${getMerchantName(order)}有新的配送任务，请及时接单`;
+      const fallbackText = transfer ? `订单${safeText$6(order.order_no || orderId)}已转到你这里，请尽快处理` : `${getMerchantName$1(order)}有新的配送任务，请及时接单`;
       return {
         type,
         orderId,
@@ -6201,9 +6671,9 @@ if (uni.restoreGlobal) {
         type: "transfer",
         orderId,
         title: socketTitle || "订单转派提醒",
-        text: speechText || socketMessage || `订单${safeText$4(order.order_no || orderId)}转派信息有更新`,
-        body: socketMessage || speechText || `订单${safeText$4(order.order_no || orderId)}转派信息有更新`,
-        dedupeKey: dedupeKey || `transfer:${orderId}:${safeText$4(order.transfer_status || order.updated_at || "")}`,
+        text: speechText || socketMessage || `订单${safeText$6(order.order_no || orderId)}转派信息有更新`,
+        body: socketMessage || speechText || `订单${safeText$6(order.order_no || orderId)}转派信息有更新`,
+        dedupeKey: dedupeKey || `transfer:${orderId}:${safeText$6(order.transfer_status || order.updated_at || "")}`,
         target: buildTargetFromJump(jumpPath, jumpParams, orderId),
         soundType,
         priority,
@@ -6215,8 +6685,8 @@ if (uni.restoreGlobal) {
         type: "cancel",
         orderId,
         title: "订单已取消",
-        text: `订单${safeText$4(order.order_no || orderId)}已取消，请停止配送`,
-        body: `订单${safeText$4(order.order_no || orderId)}已取消，请停止配送`,
+        text: `订单${safeText$6(order.order_no || orderId)}已取消，请停止配送`,
+        body: `订单${safeText$6(order.order_no || orderId)}已取消，请停止配送`,
         dedupeKey: `cancel:${orderId}`,
         target: buildOrderDetailTarget(orderId),
         meta: { order, eventName }
@@ -6227,8 +6697,8 @@ if (uni.restoreGlobal) {
         type: "pickup_ready",
         orderId,
         title: "商家已出餐",
-        text: `${getMerchantName(order)}已出餐，请尽快取餐`,
-        body: `${getMerchantName(order)}已出餐，请尽快取餐`,
+        text: `${getMerchantName$1(order)}已出餐，请尽快取餐`,
+        body: `${getMerchantName$1(order)}已出餐，请尽快取餐`,
         dedupeKey: `pickup_ready:${orderId}`,
         target: buildOrdersIndexTarget("pickup_ready", orderId),
         meta: { order, eventName }
@@ -6239,22 +6709,22 @@ if (uni.restoreGlobal) {
         type: "timeout",
         orderId,
         title: "订单即将超时",
-        text: `订单${safeText$4(order.order_no || orderId)}即将超时，请尽快处理`,
-        body: `订单${safeText$4(order.order_no || orderId)}即将超时，请尽快处理`,
+        text: `订单${safeText$6(order.order_no || orderId)}即将超时，请尽快处理`,
+        body: `订单${safeText$6(order.order_no || orderId)}即将超时，请尽快处理`,
         dedupeKey: `timeout:${orderId}:${getTimeoutBucket(order) || "socket"}`,
         target: buildOrderDetailTarget(orderId),
         meta: { order, eventName }
       };
     }
     if (eventName === "dispatch_notice" || eventName === "station_notice" || eventName === "town_message_notice") {
-      const title = safeText$4(payload.title || "站长/调度通知");
-      const text = safeText$4(payload.content || payload.message || "您有新的站长或调度通知，请及时查看");
+      const title = safeText$6(payload.title || "站长/调度通知");
+      const text = safeText$6(payload.content || payload.message || "您有新的站长或调度通知，请及时查看");
       return {
         type: "station_notice",
         title,
         text,
         body: text,
-        dedupeKey: `station_notice:${safeText$4(payload.notice_id || payload.id || text)}`,
+        dedupeKey: `station_notice:${safeText$6(payload.notice_id || payload.id || text)}`,
         target: ((_a = payload == null ? void 0 : payload.target) == null ? void 0 : _a.url) ? payload.target : { type: "navigate", url: "/pages/index/index" },
         meta: { payload, eventName }
       };
@@ -6272,11 +6742,20 @@ if (uni.restoreGlobal) {
     }
   }
   function handleReminder(reminder = {}, { source = "unknown" } = {}) {
-    const type = safeText$4(reminder.type);
+    const type = safeText$6(reminder.type);
     if (!type) {
       return false;
     }
     emitRefreshEvents(reminder);
+    if (shouldBlockNewOrderVoice(reminder)) {
+      logWarn("新配送提醒未达到骑手播报状态，已跳过语音", {
+        source,
+        orderId: reminder.orderId || "",
+        status: pickReminderOrderStatus(reminder),
+        rawEventType: reminder.rawEventType || ""
+      });
+      return false;
+    }
     const settings = getReminderSettingsSnapshot();
     if (!isReminderEnabledForType(type, settings)) {
       logInfo(`提醒类型已关闭，跳过播报: ${type}`, { source });
@@ -6313,17 +6792,36 @@ if (uni.restoreGlobal) {
       }
     });
     const isInitialLoad = !state.orderSnapshot.size;
-    if (!isInitialLoad) {
+    if (isInitialLoad) {
+      latestMap.forEach(({ raw, snapshot }, id) => {
+        if (!shouldReplayInitialPoolReminder(raw, snapshot)) {
+          return;
+        }
+        handleReminder({
+          type: isTransferOrder(raw) ? "transfer" : "new_order",
+          orderId: id,
+          title: isTransferOrder(raw) ? "收到转派订单" : "收到新派单",
+          text: isTransferOrder(raw) ? `订单${safeText$6(raw.order_no || id)}已转到你这里，请及时处理` : `${getMerchantName$1(raw)}有新的配送任务，请及时接单`,
+          body: isTransferOrder(raw) ? `订单${safeText$6(raw.order_no || id)}已转到你这里，请及时处理` : `${getMerchantName$1(raw)}有新的配送任务，请及时接单`,
+          dedupeKey: `${isTransferOrder(raw) ? "transfer" : "new_order"}:${id}:initial:${snapshot.status}`,
+          target: isTransferOrder(raw) ? buildOrderDetailTarget(id) : buildOrdersIndexTarget("new_delivery", id),
+          meta: { order: raw, source: "order_poll_initial_recent" }
+        }, { source: "order-poll:initial-recent" });
+      });
+    } else {
       latestMap.forEach(({ raw, snapshot }, id) => {
         var _a;
         const previous = (_a = state.orderSnapshot.get(id)) == null ? void 0 : _a.snapshot;
         if (!previous) {
+          if (!shouldPlayNewPoolReminder(raw, snapshot)) {
+            return;
+          }
           handleReminder({
             type: isTransferOrder(raw) ? "transfer" : "new_order",
             orderId: id,
             title: isTransferOrder(raw) ? "收到转派订单" : "收到新派单",
-            text: isTransferOrder(raw) ? `订单${safeText$4(raw.order_no || id)}已转到你这里，请及时处理` : `${getMerchantName(raw)}有新的配送任务，请及时接单`,
-            body: isTransferOrder(raw) ? `订单${safeText$4(raw.order_no || id)}已转到你这里，请及时处理` : `${getMerchantName(raw)}有新的配送任务，请及时接单`,
+            text: isTransferOrder(raw) ? `订单${safeText$6(raw.order_no || id)}已转到你这里，请及时处理` : `${getMerchantName$1(raw)}有新的配送任务，请及时接单`,
+            body: isTransferOrder(raw) ? `订单${safeText$6(raw.order_no || id)}已转到你这里，请及时处理` : `${getMerchantName$1(raw)}有新的配送任务，请及时接单`,
             dedupeKey: `${isTransferOrder(raw) ? "transfer" : "new_order"}:${id}:${snapshot.status}`,
             target: isTransferOrder(raw) ? buildOrderDetailTarget(id) : buildOrdersIndexTarget("new_delivery", id),
             meta: { order: raw, source: "order_poll_new" }
@@ -6335,8 +6833,8 @@ if (uni.restoreGlobal) {
             type: "cancel",
             orderId: id,
             title: "订单已取消",
-            text: `订单${safeText$4(raw.order_no || id)}已取消，请停止配送`,
-            body: `订单${safeText$4(raw.order_no || id)}已取消，请停止配送`,
+            text: `订单${safeText$6(raw.order_no || id)}已取消，请停止配送`,
+            body: `订单${safeText$6(raw.order_no || id)}已取消，请停止配送`,
             dedupeKey: `cancel:${id}`,
             target: buildOrderDetailTarget(id),
             meta: { order: raw, source: "order_poll_cancel" }
@@ -6347,8 +6845,8 @@ if (uni.restoreGlobal) {
             type: "pickup_ready",
             orderId: id,
             title: "商家已出餐",
-            text: `${getMerchantName(raw)}已出餐，请尽快取餐`,
-            body: `${getMerchantName(raw)}已出餐，请尽快取餐`,
+            text: `${getMerchantName$1(raw)}已出餐，请尽快取餐`,
+            body: `${getMerchantName$1(raw)}已出餐，请尽快取餐`,
             dedupeKey: `pickup_ready:${id}`,
             target: buildOrdersIndexTarget("pickup_ready", id),
             meta: { order: raw, source: "order_poll_pickup_ready" }
@@ -6360,8 +6858,8 @@ if (uni.restoreGlobal) {
             type: "transfer",
             orderId: id,
             title: "订单转派提醒",
-            text: `订单${safeText$4(raw.order_no || id)}转派信息有更新`,
-            body: `订单${safeText$4(raw.order_no || id)}转派信息有更新`,
+            text: `订单${safeText$6(raw.order_no || id)}转派信息有更新`,
+            body: `订单${safeText$6(raw.order_no || id)}转派信息有更新`,
             dedupeKey: `transfer:${id}:${snapshot.transferStatus || snapshot.updatedAt || snapshot.transferTag}`,
             target: buildOrderDetailTarget(id),
             meta: { order: raw, source: "order_poll_transfer" }
@@ -6372,8 +6870,8 @@ if (uni.restoreGlobal) {
             type: "timeout",
             orderId: id,
             title: "订单即将超时",
-            text: `订单${safeText$4(raw.order_no || id)}即将超时，请尽快处理`,
-            body: `订单${safeText$4(raw.order_no || id)}即将超时，请尽快处理`,
+            text: `订单${safeText$6(raw.order_no || id)}即将超时，请尽快处理`,
+            body: `订单${safeText$6(raw.order_no || id)}即将超时，请尽快处理`,
             dedupeKey: `timeout:${id}:${snapshot.timeoutBucket}`,
             target: buildOrderDetailTarget(id),
             meta: { order: raw, source: "order_poll_timeout" }
@@ -6389,7 +6887,16 @@ if (uni.restoreGlobal) {
     }
     state.orderPollInFlight = true;
     try {
-      const res = await getRiderOrders();
+      const res = await getRiderOrders({}, {
+        // 这里是提醒中心自己的后台轮询，不是骑手手动点击触发的页面请求。
+        // 一旦接口偶发超时，如果还沿用默认请求提示，就会每隔几秒反复弹“网络错误，请检查网络”，
+        // 骑手会误以为整个系统都坏了。
+        // 所以这里统一按“静默后台刷新”处理：失败记日志，但不要直接打断界面。
+        background: true,
+        silent: true,
+        suppressAuthToast: true,
+        suppressErrorToast: true
+      });
       const user = state.userInfo || getStoredUserInfo() || {};
       let list = toArray((res == null ? void 0 : res.data) ?? res);
       if (!isMerchantDeliveryUser(user)) {
@@ -6481,22 +6988,30 @@ if (uni.restoreGlobal) {
       state.socketCleanup();
       state.socketCleanup = null;
     }
-    if (isAppPlatform()) {
-      disconnectSocket();
-      logInfo("App 端关闭 Socket 提醒，统一使用轮询兜底");
-      return;
-    }
     if (!state.token) {
       return;
     }
     initSocket(state.token);
-    state.socketCleanup = onReminderEvents((payload, eventName) => {
+    const reminderCleanup = onReminderEvents((payload, eventName) => {
       const reminder = buildReminderFromSocket(eventName, payload);
       if (!reminder) {
         return;
       }
       handleReminder(reminder, { source: `socket:${eventName}` });
     });
+    const connectCleanup = onSocketEvent("connect", () => {
+      logInfo("Socket 已连上，立即补拉一次订单，避免重连窗口漏提醒");
+      pollOrders();
+      pollTownMessages();
+    });
+    const connectErrorCleanup = onSocketEvent("connect_error", (payload = {}) => {
+      logWarn("Socket 连接失败，当前继续保留轮询兜底", payload);
+    });
+    state.socketCleanup = () => {
+      reminderCleanup();
+      connectCleanup();
+      connectErrorCleanup();
+    };
   }
   function resetRuntimeState() {
     stopOrderPollTimer();
@@ -6526,7 +7041,7 @@ if (uni.restoreGlobal) {
     restartTownPolling();
   }
   function syncReminderCenterSession({ token = "", userInfo = null } = {}) {
-    const safeToken = safeText$4(token);
+    const safeToken = safeText$6(token);
     const safeUser = userInfo && typeof userInfo === "object" ? userInfo : null;
     const isReady = !!safeToken && !!safeUser && isRiderAppUser(safeUser);
     if (!isReady) {
@@ -7416,7 +7931,11 @@ if (uni.restoreGlobal) {
       isTownStationmaster: townStationmaster,
       isTownScope: townScope,
       useSimplifiedTabs: true,
-      canReportDispatchLocation: isCountyRider(user) || townStationmaster,
+      // 后台定位上报不能只给县城司机。
+      // 乡镇配送账号进入“去送货/地图总览”时，也要依赖这条链路把骑手当前点位喂给地图页，
+      // 否则地图上只能看到商家/用户点，看不到骑手自己的当前位置。
+      // 这里按“县城司机 + 全部乡镇配送账号”放开，先保证送货地图主链路完整。
+      canReportDispatchLocation: isCountyRider(user) || townScope,
       nicknameLabel: "骑手"
     };
   }
@@ -7555,7 +8074,10 @@ if (uni.restoreGlobal) {
         acceptingOrderId: "",
         reminderEventHandler: null,
         orderRefreshHandler: null,
-        orderRefreshTimer: null
+        orderRefreshTimer: null,
+        orderListRequestPromise: null,
+        orderListRequestKey: "",
+        lastOrderListLoadedAt: 0
       };
     },
     onLoad(options) {
@@ -7582,11 +8104,21 @@ if (uni.restoreGlobal) {
         clearTimeout(this.orderRefreshTimer);
         this.orderRefreshTimer = null;
       }
+      this.orderListRequestPromise = null;
+    },
+    async onPullDownRefresh() {
+      try {
+        this.page = 1;
+        await this.loadOrderList({ force: true });
+      } finally {
+        uni.stopPullDownRefresh();
+      }
     },
     methods: {
       applyReminderRouteOptions(options = {}) {
         this.reminderScene = String(options.scene || "").trim();
         this.reminderOrderId = String(options.orderId || "").trim();
+        this.currentStatus = String(options.status || this.currentStatus || "").trim();
       },
       bindReminderEvents() {
         if (!this.reminderEventHandler) {
@@ -7598,7 +8130,7 @@ if (uni.restoreGlobal) {
           };
         }
         if (!this.orderRefreshHandler) {
-          this.orderRefreshHandler = () => {
+          this.orderRefreshHandler = (payload = {}) => {
             if (this.orderRefreshTimer) {
               clearTimeout(this.orderRefreshTimer);
             }
@@ -7660,6 +8192,7 @@ if (uni.restoreGlobal) {
           return [
             { key: "town_pending", label: "未接单", count: 0 },
             { key: "town_delivering", label: "配送中", count: 0 },
+            { key: "transfer", label: "转入单", count: 0 },
             { key: "6", label: "已完成", count: 0 }
           ];
         }
@@ -7696,13 +8229,19 @@ if (uni.restoreGlobal) {
       resetStatusTabs() {
         this.statusTabs = this.buildStatusTabs();
         const validKeys = this.statusTabs.map((tab) => tab.key);
+        if (this.currentStatus && validKeys.includes(this.currentStatus)) {
+          return;
+        }
         if (!validKeys.includes(this.currentStatus)) {
           this.currentStatus = this.getDefaultCurrentStatus();
         }
       },
-      getStatusText(status) {
+      getStatusText(orderOrStatus) {
+        const status = typeof orderOrStatus === "object" && orderOrStatus !== null ? orderOrStatus.status : orderOrStatus;
+        const order = typeof orderOrStatus === "object" && orderOrStatus !== null ? orderOrStatus : {};
         return getOrderStatusText(status, {
-          profile: this.getDeliveryProfile()
+          profile: this.getDeliveryProfile(),
+          order
         });
       },
       safeText(value2) {
@@ -7752,17 +8291,36 @@ if (uni.restoreGlobal) {
         return this.safeText(transferFromUser) || "县城司机";
       },
       getTransferCardSummary(order = {}) {
+        const transferStageText = this.safeText(order.transfer_stage_text);
         if (this.safeText(order.transfer_status) === "assigned_to_town_rider") {
           const targetUser = order.transfer_to_user;
           const targetName = targetUser && typeof targetUser === "object" ? this.safeText(targetUser.nickname || targetUser.username || targetUser.name) : "";
           return targetName ? `已转给：${targetName}` : "已转给骑手";
         }
-        const pieces = [`来源：${this.getTransferFromUserName(order)}`];
+        const pieces = [transferStageText || `来源：${this.getTransferFromUserName(order)}`];
+        if (!transferStageText) {
+          pieces[0] = `来源：${this.getTransferFromUserName(order)}`;
+        } else {
+          pieces.push(`来源：${this.getTransferFromUserName(order)}`);
+        }
         const targetTown = this.getTransferToTownName(order);
         if (targetTown) {
           pieces.push(`目标乡镇：${targetTown}`);
         }
         return pieces.join(" · ");
+      },
+      isCountyTransferPoolOrder(order = {}) {
+        const poolKey = this.safeText(order.transfer_pool_key);
+        if (poolKey.startsWith("county_to_town_")) {
+          return true;
+        }
+        return this.isTransferOrder(order) && this.safeText(order.origin_delivery_domain) === "county_dispatch" && this.safeText(order.current_delivery_domain) === "county_to_town_transfer";
+      },
+      isStationmasterTransferTabOrder(order = {}) {
+        if (!this.isCountyTransferPoolOrder(order)) {
+          return false;
+        }
+        return Number(order.status) !== 6;
       },
       getStatusColor(status, order = {}) {
         var _a, _b;
@@ -7820,7 +8378,7 @@ if (uni.restoreGlobal) {
           return false;
         }
         const status = Number(order.status);
-        if (![3, 4].includes(status)) {
+        if (![2, 3, 4].includes(status)) {
           return false;
         }
         return !this.getOrderResponsibleId(order);
@@ -7856,11 +8414,17 @@ if (uni.restoreGlobal) {
         return Number(status) === 4;
       },
       isTownPendingTabOrder(order = {}) {
+        if (this.isCountyTransferPoolOrder(order)) {
+          return false;
+        }
         return this.isTownPoolOrder(order);
       },
       isTownDeliveringTabOrder(order = {}) {
+        if (this.isCountyTransferPoolOrder(order)) {
+          return false;
+        }
         const status = Number(order.status);
-        if (![2, 3, 4, 5].includes(status)) {
+        if (status !== 5) {
           return false;
         }
         if (this.isActualTownStationmaster()) {
@@ -7883,6 +8447,8 @@ if (uni.restoreGlobal) {
             return list.filter((order) => this.isTownPendingTabOrder(order));
           case "town_delivering":
             return list.filter((order) => this.isTownDeliveringTabOrder(order));
+          case "transfer":
+            return list.filter((order) => this.isStationmasterTransferTabOrder(order));
           case "6":
             return list.filter((order) => Number(order.status) === 6);
           default:
@@ -7935,51 +8501,75 @@ if (uni.restoreGlobal) {
         this.currentStatus = status;
         this.clearReminderScene();
         this.page = 1;
-        this.loadOrderList();
+        this.loadOrderList({ force: true });
       },
       clearReminderScene() {
         this.reminderScene = "";
         this.reminderOrderId = "";
       },
-      async loadOrderList() {
+      buildOrderListRequestKey(params = {}) {
+        return JSON.stringify({
+          status: this.currentStatus,
+          reminderScene: this.reminderScene,
+          reminderOrderId: this.reminderOrderId,
+          params
+        });
+      },
+      async loadOrderList({ force = false } = {}) {
         if (!this.hasPageAccess) {
           return;
         }
-        try {
-          const params = {};
-          if (!this.isTownStationmasterUser() && !this.useSimplifiedTabs() && this.currentStatus !== "" && this.currentStatus !== "transfer") {
-            params.status = this.currentStatus;
-          }
-          const res = await getRiderOrders(params);
-          let list = Array.isArray(res == null ? void 0 : res.data) ? res.data : [];
-          if (!this.isMerchantDeliveryMode()) {
-            list = list.filter((order) => order.order_type !== "supermarket");
-          }
-          if (this.reminderOrderId) {
-            list = list.slice().sort((left, right) => {
-              const leftScore = String(left.id) === this.reminderOrderId ? 1 : 0;
-              const rightScore = String(right.id) === this.reminderOrderId ? 1 : 0;
-              return rightScore - leftScore;
-            });
-          }
-          this.updateStatusCounts(list);
-          if (this.isMerchantDeliveryMode()) {
-            this.orderList = this.filterMerchantDeliveryOrders(list);
-            return;
-          }
-          if (this.isTownStationmasterUser()) {
-            this.orderList = this.filterTownStationmasterOrders(list);
-            return;
-          }
-          if (this.useSimplifiedTabs()) {
-            this.orderList = this.filterCountyOrders(list);
-            return;
-          }
-          this.orderList = this.currentStatus === "transfer" ? list.filter((order) => this.isTransferOrder(order)) : list;
-        } catch (e) {
-          formatAppLog("error", "at pages/orders/index.vue:649", "加载订单失败", e);
-          this.orderList = [];
+        const params = {};
+        if (!this.isTownStationmasterUser() && !this.useSimplifiedTabs() && this.currentStatus !== "" && this.currentStatus !== "transfer") {
+          params.status = this.currentStatus;
         }
+        const requestKey = this.buildOrderListRequestKey(params);
+        const now = Date.now();
+        if (!force && this.orderListRequestPromise && this.orderListRequestKey === requestKey) {
+          return this.orderListRequestPromise;
+        }
+        if (!force && this.orderListRequestKey === requestKey && now - this.lastOrderListLoadedAt < 1e3) {
+          return this.orderList;
+        }
+        const requestPromise = (async () => {
+          try {
+            const res = await getRiderOrders(params);
+            let list = Array.isArray(res == null ? void 0 : res.data) ? res.data : [];
+            if (!this.isMerchantDeliveryMode()) {
+              list = list.filter((order) => order.order_type !== "supermarket");
+            }
+            if (this.reminderOrderId) {
+              list = list.slice().sort((left, right) => {
+                const leftScore = String(left.id) === this.reminderOrderId ? 1 : 0;
+                const rightScore = String(right.id) === this.reminderOrderId ? 1 : 0;
+                return rightScore - leftScore;
+              });
+            }
+            this.updateStatusCounts(list);
+            if (this.isMerchantDeliveryMode()) {
+              this.orderList = this.filterMerchantDeliveryOrders(list);
+            } else if (this.isTownStationmasterUser()) {
+              this.orderList = this.filterTownStationmasterOrders(list);
+            } else if (this.useSimplifiedTabs()) {
+              this.orderList = this.filterCountyOrders(list);
+            } else {
+              this.orderList = this.currentStatus === "transfer" ? list.filter((order) => this.isTransferOrder(order)) : list;
+            }
+            this.lastOrderListLoadedAt = Date.now();
+            return this.orderList;
+          } catch (e) {
+            formatAppLog("error", "at pages/orders/index.vue:738", "加载订单失败", e);
+            this.orderList = [];
+            throw e;
+          } finally {
+            if (this.orderListRequestPromise === requestPromise) {
+              this.orderListRequestPromise = null;
+            }
+          }
+        })();
+        this.orderListRequestKey = requestKey;
+        this.orderListRequestPromise = requestPromise;
+        return requestPromise;
       },
       updateStatusCounts(sourceList = []) {
         if (this.isMerchantDeliveryMode()) {
@@ -7995,10 +8585,11 @@ if (uni.restoreGlobal) {
         if (this.isTownStationmasterUser()) {
           const pendingCount = sourceList.filter((order) => this.isTownPendingTabOrder(order)).length;
           const deliveringCount = sourceList.filter((order) => this.isTownDeliveringTabOrder(order)).length;
+          const transferCount2 = sourceList.filter((order) => this.isStationmasterTransferTabOrder(order)).length;
           const completedCount = sourceList.filter((order) => Number(order.status) === 6).length;
           this.statusTabs = this.buildStatusTabs().map((tab) => ({
             ...tab,
-            count: tab.key === "town_pending" ? pendingCount : tab.key === "town_delivering" ? deliveringCount : completedCount
+            count: tab.key === "town_pending" ? pendingCount : tab.key === "town_delivering" ? deliveringCount : tab.key === "transfer" ? transferCount2 : completedCount
           }));
           return;
         }
@@ -8042,6 +8633,9 @@ if (uni.restoreGlobal) {
           if (this.currentStatus === "town_delivering") {
             return "当前暂无配送中的乡镇订单";
           }
+          if (this.currentStatus === "transfer") {
+            return "当前暂无县城转入的乡镇订单";
+          }
           return "当前暂无已完成的乡镇订单";
         }
         if (this.useSimplifiedTabs()) {
@@ -8057,9 +8651,12 @@ if (uni.restoreGlobal) {
       },
       async onRefresh() {
         this.refreshing = true;
-        this.page = 1;
-        await this.loadOrderList();
-        this.refreshing = false;
+        try {
+          this.page = 1;
+          await this.loadOrderList({ force: true });
+        } finally {
+          this.refreshing = false;
+        }
       },
       loadMore() {
         if (this.loadingMore)
@@ -8099,7 +8696,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "已开始配送", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:785", "取餐失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:898", "取餐失败", e);
             }
           }
         });
@@ -8123,7 +8720,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "接单成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:808", "接单失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:921", "接单失败", e);
             } finally {
               this.acceptingOrderId = "";
             }
@@ -8150,7 +8747,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "送达成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:834", "确认送达失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:947", "确认送达失败", e);
               uni.showToast({
                 title: (e == null ? void 0 : e.message) || ((_a = e == null ? void 0 : e.data) == null ? void 0 : _a.message) || ((_c = (_b = e == null ? void 0 : e.response) == null ? void 0 : _b.data) == null ? void 0 : _c.message) || "确认送达失败",
                 icon: "none"
@@ -8178,7 +8775,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "已开始配送", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:860", "自配送开始失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:973", "自配送开始失败", e);
               uni.showToast({
                 title: (e == null ? void 0 : e.message) || ((_a = e == null ? void 0 : e.data) == null ? void 0 : _a.message) || ((_c = (_b = e == null ? void 0 : e.response) == null ? void 0 : _b.data) == null ? void 0 : _c.message) || "开始配送失败",
                 icon: "none"
@@ -8206,7 +8803,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "送达成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:886", "自配送确认送达失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:999", "自配送确认送达失败", e);
               uni.showToast({
                 title: (e == null ? void 0 : e.message) || ((_a = e == null ? void 0 : e.data) == null ? void 0 : _a.message) || ((_c = (_b = e == null ? void 0 : e.response) == null ? void 0 : _b.data) == null ? void 0 : _c.message) || "确认送达失败",
                 icon: "none"
@@ -8234,7 +8831,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "操作成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:913", "特殊完结失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:1026", "特殊完结失败", e);
             }
           }
         });
@@ -8354,7 +8951,7 @@ if (uni.restoreGlobal) {
                             class: "status-tag",
                             style: vue.normalizeStyle({ backgroundColor: $options.getStatusColor(order.status, order) })
                           },
-                          vue.toDisplayString($options.getStatusText(order.status)),
+                          vue.toDisplayString($options.getStatusText(order)),
                           5
                           /* TEXT, STYLE */
                         )
@@ -8447,16 +9044,6 @@ if (uni.restoreGlobal) {
                     class: "btn btn-primary",
                     onClick: vue.withModifiers(($event) => $options.handleMerchantSelfDeliveryStart(order), ["stop"])
                   }, " 开始配送 ", 8, ["onClick"])) : vue.createCommentVNode("v-if", true),
-                  $options.canConfirmMerchantSelfDelivery(order) ? (vue.openBlock(), vue.createElementBlock("button", {
-                    key: 2,
-                    class: "btn btn-success",
-                    onClick: vue.withModifiers(($event) => $options.handleMerchantSelfDeliveryConfirm(order), ["stop"])
-                  }, " 确认送达 ", 8, ["onClick"])) : vue.createCommentVNode("v-if", true),
-                  !$options.isMerchantDeliveryMode() && $options.canRiderCallConfirmDeliveryApi(order.status) && $options.canOperateOrder(order) ? (vue.openBlock(), vue.createElementBlock("button", {
-                    key: 3,
-                    class: "btn btn-success",
-                    onClick: vue.withModifiers(($event) => $options.handleStandardDelivery(order), ["stop"])
-                  }, " 确认送达 ", 8, ["onClick"])) : vue.createCommentVNode("v-if", true),
                   vue.createElementVNode("button", {
                     class: "btn btn-default",
                     onClick: vue.withModifiers(($event) => $options.goDetail(order), ["stop"])
@@ -8996,7 +9583,7 @@ if (uni.restoreGlobal) {
       lat: parsedLat + dLat
     };
   }
-  function hasValidCoords(coords = {}) {
+  function hasValidCoords$1(coords = {}) {
     const lng = Number(coords.lng);
     const lat = Number(coords.lat);
     return Number.isFinite(lng) && Number.isFinite(lat) && lng !== 0 && lat !== 0;
@@ -9009,7 +9596,7 @@ if (uni.restoreGlobal) {
     }
     if (coordinateType === "wgs84") {
       const converted = wgs84ToGcj02(lng, lat);
-      if (!hasValidCoords(converted)) {
+      if (!hasValidCoords$1(converted)) {
         return { lng: "", lat: "" };
       }
       return converted;
@@ -9036,7 +9623,7 @@ if (uni.restoreGlobal) {
       const sample = typeof getter === "function" ? getter() : (_b = app == null ? void 0 : app.globalData) == null ? void 0 : _b.latestRiderLocation;
       const lng = Number((sample == null ? void 0 : sample.longitude) ?? (sample == null ? void 0 : sample.lng) ?? 0);
       const lat = Number((sample == null ? void 0 : sample.latitude) ?? (sample == null ? void 0 : sample.lat) ?? 0);
-      if (!hasValidCoords({ lng, lat })) {
+      if (!hasValidCoords$1({ lng, lat })) {
         return { lng: "", lat: "" };
       }
       return { lng, lat };
@@ -9045,11 +9632,11 @@ if (uni.restoreGlobal) {
     }
   }
   async function resolveNavigationStartCoords(fallbackCoords = null) {
-    if (hasValidCoords(fallbackCoords || {})) {
+    if (hasValidCoords$1(fallbackCoords || {})) {
       return fallbackCoords;
     }
     const cached = getCachedRiderCoords();
-    if (hasValidCoords(cached)) {
+    if (hasValidCoords$1(cached)) {
       return cached;
     }
     try {
@@ -9057,7 +9644,7 @@ if (uni.restoreGlobal) {
         isHighAccuracy: false,
         highAccuracyExpireTime: 4e3
       });
-      if (hasValidCoords(quickLocation)) {
+      if (hasValidCoords$1(quickLocation)) {
         return quickLocation;
       }
     } catch (error) {
@@ -9067,19 +9654,281 @@ if (uni.restoreGlobal) {
         isHighAccuracy: true,
         highAccuracyExpireTime: 8e3
       });
-      if (hasValidCoords(preciseLocation)) {
+      if (hasValidCoords$1(preciseLocation)) {
         return preciseLocation;
       }
     } catch (error) {
     }
     try {
       const gcjLocation = await requestNavigationLocation("gcj02");
-      if (hasValidCoords(gcjLocation)) {
+      if (hasValidCoords$1(gcjLocation)) {
         return gcjLocation;
       }
     } catch (error) {
     }
     return { lng: "", lat: "" };
+  }
+  const TENCENT_NAV_STAGE = {
+    PICKUP: "pickup",
+    DELIVERY: "delivery"
+  };
+  function normalizeTestParams(input = {}) {
+    const stage = input.stage === TENCENT_NAV_STAGE.DELIVERY ? TENCENT_NAV_STAGE.DELIVERY : TENCENT_NAV_STAGE.PICKUP;
+    return {
+      stage,
+      orderId: String(input.orderId || ""),
+      riderLng: toNumber(input.riderLng),
+      riderLat: toNumber(input.riderLat),
+      merchantLng: toNumber(input.merchantLng),
+      merchantLat: toNumber(input.merchantLat),
+      customerLng: toNumber(input.customerLng),
+      customerLat: toNumber(input.customerLat)
+    };
+  }
+  function toNumber(value2) {
+    const num = Number(value2);
+    return Number.isFinite(num) ? num : 0;
+  }
+  function getTencentNativeModule() {
+    try {
+      const plugin = requireNativePlugin("TencentNaviModule");
+      return plugin;
+    } catch (error) {
+      return null;
+    }
+    return null;
+  }
+  function startTencentNativeNavigation(params = {}) {
+    const normalized = normalizeTestParams(params);
+    const module = getTencentNativeModule();
+    if (!module) {
+      reportTencentBridgeDebug("D", "sdk/tencent-nav/bridge/native-bridge.js:startTencentNativeNavigation", "腾讯原生插件不可用", {
+        stage: normalized.stage,
+        orderId: normalized.orderId
+      });
+      return Promise.resolve({
+        success: false,
+        code: "MODULE_UNAVAILABLE",
+        message: "腾讯原生导航插件未注册，当前只能完成测试参数验证",
+        params: normalized
+      });
+    }
+    return new Promise((resolve) => {
+      try {
+        module.startNavigation(normalized, (result) => {
+          resolve({
+            success: !!(result && (result.success || result.code === 0)),
+            code: result && result.code !== void 0 ? result.code : "UNKNOWN",
+            message: result && result.message ? result.message : "腾讯原生导航已返回结果",
+            raw: result || null,
+            params: normalized
+          });
+        });
+      } catch (error) {
+        resolve({
+          success: false,
+          code: "NATIVE_CALL_ERROR",
+          message: error && error.message ? error.message : "调用腾讯原生导航插件异常",
+          params: normalized
+        });
+      }
+    });
+  }
+  function startTencentNavigation(params = {}) {
+    return startTencentNativeNavigation(params);
+  }
+  function safeText$5(value2) {
+    if (value2 === void 0 || value2 === null) {
+      return "";
+    }
+    return String(value2).trim();
+  }
+  function getCoordinateByKeys(source = {}, keys = []) {
+    for (let i = 0; i < keys.length; i++) {
+      const value2 = source[keys[i]];
+      if (value2 !== void 0 && value2 !== null && value2 !== "") {
+        return value2;
+      }
+    }
+    return "";
+  }
+  function parseAddressForOrder(order = {}) {
+    try {
+      return typeof order.delivery_address === "string" ? JSON.parse(order.delivery_address) : order.delivery_address || {};
+    } catch (error) {
+      return {};
+    }
+  }
+  function hasValidCoords(coords = {}) {
+    const lng = Number(coords.lng);
+    const lat = Number(coords.lat);
+    return Number.isFinite(lng) && Number.isFinite(lat) && !(lng === 0 && lat === 0);
+  }
+  function extractRiderOrderList(res) {
+    var _a;
+    const candidates = [
+      (_a = res == null ? void 0 : res.data) == null ? void 0 : _a.data,
+      res == null ? void 0 : res.data,
+      res == null ? void 0 : res.rows,
+      res
+    ];
+    return candidates.find((item) => Array.isArray(item)) || [];
+  }
+  function isActiveMapOrderStatus(status, stage = "delivery") {
+    const normalizedStage = safeText$5(stage) === "pickup" ? "pickup" : "delivery";
+    const numericStatus = Number(status);
+    if (normalizedStage === "pickup") {
+      return [2, 3, 4].includes(numericStatus);
+    }
+    return numericStatus === 5;
+  }
+  function getCustomerCoords(order = {}) {
+    const address = parseAddressForOrder(order);
+    const lng = getCoordinateByKeys(order, ["customer_lng", "delivery_longitude", "longitude", "delivery_lng", "deliveryLng", "user_lng", "userLng", "contact_lng", "receiver_lng", "to_lng", "dest_lng", "customerLng"]) || getCoordinateByKeys(address, ["customer_lng", "delivery_longitude", "longitude", "lng", "delivery_lng", "deliveryLng", "user_lng", "receiver_lng", "to_lng", "dest_lng", "customerLng"]);
+    const lat = getCoordinateByKeys(order, ["customer_lat", "delivery_latitude", "latitude", "delivery_lat", "deliveryLat", "user_lat", "userLat", "contact_lat", "receiver_lat", "to_lat", "dest_lat", "customerLat"]) || getCoordinateByKeys(address, ["customer_lat", "delivery_latitude", "latitude", "lat", "delivery_lat", "deliveryLat", "user_lat", "receiver_lat", "to_lat", "dest_lat", "customerLat"]);
+    return { lng, lat };
+  }
+  function getMerchantCoords(order = {}) {
+    const address = parseAddressForOrder(order);
+    const merchant = (order == null ? void 0 : order.merchant) || {};
+    const lng = getCoordinateByKeys(order, ["merchant_lng", "merchantLng", "shop_lng", "shopLng", "store_lng", "storeLng", "pickup_lng", "pickupLng", "from_lng", "fromLng"]) || getCoordinateByKeys(merchant, ["merchant_lng", "merchantLng", "lng", "lat_lng", "longitude", "lon", "map_lng"]) || getCoordinateByKeys(address, ["merchant_lng", "shop_lng", "store_lng", "pickup_lng", "from_lng"]);
+    const lat = getCoordinateByKeys(order, ["merchant_lat", "merchantLat", "shop_lat", "shopLat", "store_lat", "storeLat", "pickup_lat", "pickupLat", "from_lat", "fromLat"]) || getCoordinateByKeys(merchant, ["merchant_lat", "merchantLat", "lat", "latitude", "map_lat"]) || getCoordinateByKeys(address, ["merchant_lat", "shop_lat", "store_lat", "pickup_lat", "from_lat"]);
+    return { lng, lat };
+  }
+  function getStatusText(order = {}) {
+    var _a;
+    const backendText = safeText$5(order.status_text);
+    if (backendText) {
+      return backendText;
+    }
+    return ((_a = ORDER_STATUS[Number(order.status)]) == null ? void 0 : _a.text) || `状态${safeText$5(order.status) || "未知"}`;
+  }
+  function maskPrivacyName(name = "") {
+    const value2 = safeText$5(name);
+    if (!value2) {
+      return "";
+    }
+    if (value2.length <= 1) {
+      return `${value2}*`;
+    }
+    return `${value2.slice(0, 1)}${"*".repeat(Math.max(1, value2.length - 1))}`;
+  }
+  function maskPrivacyPhone(phone = "") {
+    const value2 = safeText$5(phone).replace(/\s+/g, "");
+    if (!value2) {
+      return "";
+    }
+    if (value2.length >= 11) {
+      return `${value2.slice(0, 3)}****${value2.slice(-4)}`;
+    }
+    if (value2.length >= 7) {
+      return `${value2.slice(0, 2)}***${value2.slice(-2)}`;
+    }
+    if (value2.length <= 2) {
+      return `${value2}*`;
+    }
+    return `${value2.slice(0, 1)}***${value2.slice(-1)}`;
+  }
+  function parseProductsInfo(order = {}) {
+    const candidates = [
+      order.products_info,
+      order.productsInfo,
+      order.order_items,
+      order.orderItems,
+      order.items_json,
+      order.items
+    ];
+    const source = candidates.find((item) => item !== void 0 && item !== null && item !== "");
+    if (Array.isArray(source)) {
+      return source;
+    }
+    if (typeof source === "string") {
+      try {
+        const parsed = JSON.parse(source);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function buildGoodsSummaryList(order = {}) {
+    const goodsList = parseProductsInfo(order);
+    return goodsList.map((item) => {
+      const name = safeText$5(
+        (item == null ? void 0 : item.product_name) || (item == null ? void 0 : item.goods_name) || (item == null ? void 0 : item.name) || (item == null ? void 0 : item.title) || (item == null ? void 0 : item.productName)
+      );
+      const quantity = Number(
+        (item == null ? void 0 : item.quantity) ?? (item == null ? void 0 : item.count) ?? (item == null ? void 0 : item.num) ?? (item == null ? void 0 : item.amount) ?? (item == null ? void 0 : item.qty) ?? 1
+      );
+      if (!name) {
+        return "";
+      }
+      return quantity > 1 ? `${name} x${quantity}` : name;
+    }).filter(Boolean);
+  }
+  function getMerchantName(order = {}) {
+    var _a;
+    return safeText$5(
+      (order == null ? void 0 : order.merchant_name) || (order == null ? void 0 : order.merchantName) || ((_a = order == null ? void 0 : order.merchant) == null ? void 0 : _a.name) || (order == null ? void 0 : order.shop_name) || (order == null ? void 0 : order.store_name)
+    );
+  }
+  function getContactName(order = {}) {
+    var _a;
+    return safeText$5(
+      (order == null ? void 0 : order.contact_name) || (order == null ? void 0 : order.contactName) || (order == null ? void 0 : order.receiver_name) || (order == null ? void 0 : order.receiverName) || ((_a = order == null ? void 0 : order.user) == null ? void 0 : _a.nickname)
+    );
+  }
+  function getContactPhone(order = {}) {
+    var _a;
+    return safeText$5(
+      (order == null ? void 0 : order.contact_phone) || (order == null ? void 0 : order.contactPhone) || (order == null ? void 0 : order.receiver_phone) || (order == null ? void 0 : order.receiverPhone) || ((_a = order == null ? void 0 : order.user) == null ? void 0 : _a.phone)
+    );
+  }
+  function buildOrderLabel(order = {}) {
+    const orderNo = safeText$5(order.order_no || order.orderNo);
+    if (orderNo) {
+      return `尾号${orderNo.slice(-4)}`;
+    }
+    const fallbackId = safeText$5(order.id);
+    return fallbackId ? `订单${fallbackId.slice(-4)}` : "订单";
+  }
+  function buildRiderOverviewOrders(orderList = [], { currentOrderId = "", user = {}, stage = "delivery" } = {}) {
+    const currentIdText = safeText$5(currentOrderId);
+    const normalizedStage = safeText$5(stage) === "pickup" ? "pickup" : "delivery";
+    return orderList.filter((item) => isActiveMapOrderStatus(item == null ? void 0 : item.status, normalizedStage)).filter((item) => hasOrderOwnership(item, user)).map((item) => {
+      const customerCoords = getCustomerCoords(item);
+      if (!hasValidCoords(customerCoords)) {
+        return null;
+      }
+      const merchantCoords = getMerchantCoords(item);
+      const orderId = safeText$5(item == null ? void 0 : item.id);
+      return {
+        id: orderId,
+        orderNo: safeText$5((item == null ? void 0 : item.order_no) || (item == null ? void 0 : item.orderNo)),
+        label: buildOrderLabel(item),
+        status: Number((item == null ? void 0 : item.status) || 0),
+        statusText: getStatusText(item),
+        merchantName: getMerchantName(item),
+        privacyContactName: maskPrivacyName(getContactName(item)),
+        privacyContactPhone: maskPrivacyPhone(getContactPhone(item)),
+        goodsSummaryList: buildGoodsSummaryList(item),
+        // 订单里的商家 / 用户坐标当前统一按业务坐标 WGS84 存库。
+        // 后面只要进入腾讯地图或腾讯导航，再由消费端明确转成 GCJ02，
+        // 这样可以避免不同页面各自猜坐标系，最后出现“一边在左、一边在右”的偏移问题。
+        customerLng: String(customerCoords.lng || ""),
+        customerLat: String(customerCoords.lat || ""),
+        merchantLng: String(merchantCoords.lng || ""),
+        merchantLat: String(merchantCoords.lat || ""),
+        customerCoordType: "wgs84",
+        merchantCoordType: "wgs84",
+        isCurrent: currentIdText !== "" && orderId === currentIdText
+      };
+    }).filter(Boolean);
+  }
+  function findOverviewOrder(orderList = [], orderId = "") {
+    const targetId = safeText$5(orderId);
+    return orderList.find((item) => safeText$5(item == null ? void 0 : item.id) === targetId) || null;
   }
   function reportDetailDebug(hypothesisId, location2, msg, data = {}) {
     {
@@ -9201,6 +10050,10 @@ if (uni.restoreGlobal) {
       this.stopDeliveryDistancePolling();
     },
     methods: {
+      getOrderAvailableActions(order = this.order) {
+        const list = Array.isArray(order == null ? void 0 : order.available_actions) ? order.available_actions : [];
+        return list.map((item) => this.safeText(item)).filter(Boolean);
+      },
       formatTime,
       canRiderCallConfirmDeliveryApi,
       canRiderOfferSpecialComplete,
@@ -9337,7 +10190,14 @@ if (uni.restoreGlobal) {
         return this.safeText(order.transfer_tag) || (this.isTransferOrder(order) ? "转派单" : "");
       },
       getTransferStatusText(order = {}) {
-        return this.safeText(order.transfer_status);
+        return this.safeText(order.transfer_stage_text) || this.safeText(order.transfer_status);
+      },
+      isCountyTransferPoolOrder(order = {}) {
+        const poolKey = this.safeText(order.transfer_pool_key);
+        if (poolKey.startsWith("county_to_town_")) {
+          return true;
+        }
+        return this.isTransferOrder(order) && this.safeText(order.origin_delivery_domain) === "county_dispatch" && this.safeText(order.current_delivery_domain) === "county_to_town_transfer";
       },
       getTransferToTownName(order = {}) {
         const directTargetTownName = this.safeText(order.target_town_name);
@@ -9394,6 +10254,7 @@ if (uni.restoreGlobal) {
         return "";
       },
       getTransferBannerText(order = {}) {
+        const stageText = this.safeText(order.transfer_stage_text);
         if (this.isAssignedToTownRider(order)) {
           const riderName = this.getAssignedTownRiderName(order);
           const fromUser = this.getTransferFromUserName(order);
@@ -9401,7 +10262,11 @@ if (uni.restoreGlobal) {
             return `已转给：${riderName}${fromUser ? ` · 来源：${fromUser}` : ""}`;
           }
         }
-        const pieces = [`来源：${this.getTransferFromUserName(order)}`];
+        const pieces = [];
+        if (stageText) {
+          pieces.push(stageText);
+        }
+        pieces.push(`来源：${this.getTransferFromUserName(order)}`);
         const targetTown = this.getTransferToTownName(order);
         if (targetTown) {
           pieces.push(`目标乡镇：${targetTown}`);
@@ -9411,6 +10276,31 @@ if (uni.restoreGlobal) {
           pieces.push(`目标站长：${targetUser}`);
         }
         return pieces.join(" · ");
+      },
+      getDeliveryDomainText(domain = "") {
+        const normalized = this.safeText(domain);
+        const map = {
+          county_dispatch: "县城调度域",
+          town_native_delivery: "乡镇原生履约域",
+          county_to_town_transfer: "县城转乡镇履约域",
+          self_delivery: "店铺自配送域"
+        };
+        return map[normalized] || "未标注";
+      },
+      getTransferPoolText(order = {}) {
+        const poolKey = this.safeText(order.transfer_pool_key);
+        const poolMap = {
+          county_to_town_stationmaster_pool: "县城转入乡镇站长池",
+          county_to_town_rider_pool: "县城转入乡镇骑手池",
+          county_returned_pool: "县城回退池"
+        };
+        return poolMap[poolKey] || "县城转乡镇转入池";
+      },
+      getTransferRevokeButtonText() {
+        if (this.isCountyTransferPoolOrder(this.order) && this.isTownStationmasterUser()) {
+          return "拒接并退回县城";
+        }
+        return "撤回一次";
       },
       normalizeIdentityValue(value2) {
         if (value2 === void 0 || value2 === null || value2 === "") {
@@ -9425,14 +10315,19 @@ if (uni.restoreGlobal) {
         return this.canAccessPickupNavigation(status) || this.canAccessDeliveryNavigation(status);
       },
       canAccessPickupNavigation(status) {
+        const actions = this.getOrderAvailableActions();
+        if (actions.length) {
+          return actions.includes("navigate_pickup");
+        }
         if (this.isTownOrder(this.order)) {
-          return Number(status) >= 2 && Number(status) <= 5;
+          return Number(status) >= 2 && Number(status) <= 4;
         }
         return [4, 5].includes(Number(status));
       },
       canAccessDeliveryNavigation(status) {
-        if (this.isTownOrder(this.order)) {
-          return Number(status) >= 2 && Number(status) <= 5;
+        const actions = this.getOrderAvailableActions();
+        if (actions.length) {
+          return actions.includes("navigate_delivery");
         }
         return Number(status) === 5;
       },
@@ -9465,13 +10360,13 @@ if (uni.restoreGlobal) {
             silent: true
           });
           this.syncDeliveryDistancePolling();
-          formatAppLog("log", "at pages/orders/detail.vue:711", "[order-detail] loadOrderDetail success", {
+          formatAppLog("log", "at pages/orders/detail.vue:784", "[order-detail] loadOrderDetail success", {
             orderId: ((_a = this.order) == null ? void 0 : _a.id) ?? "",
             orderNo: ((_b = this.order) == null ? void 0 : _b.order_no) ?? "",
             status: ((_c = this.order) == null ? void 0 : _c.status) ?? "",
             hasOrderOwnership: this.hasOrderOwnership
           });
-          formatAppLog("log", "at pages/orders/detail.vue:717", "[order-detail] debug transfer fields", {
+          formatAppLog("log", "at pages/orders/detail.vue:790", "[order-detail] debug transfer fields", {
             order_type: (_d = this.order) == null ? void 0 : _d.order_type,
             status: (_e = this.order) == null ? void 0 : _e.status,
             rider_id: (_f = this.order) == null ? void 0 : _f.rider_id,
@@ -9479,7 +10374,7 @@ if (uni.restoreGlobal) {
             can_transfer: (_h = this.order) == null ? void 0 : _h.can_transfer
           });
         } catch (e) {
-          formatAppLog("error", "at pages/orders/detail.vue:725", "加载订单详情失败", e);
+          formatAppLog("error", "at pages/orders/detail.vue:798", "加载订单详情失败", e);
         }
       },
       async loadTownOptions() {
@@ -9491,7 +10386,7 @@ if (uni.restoreGlobal) {
           })) : [];
         } catch (error) {
           this.townOptions = [];
-          formatAppLog("error", "at pages/orders/detail.vue:739", "加载转派乡镇列表失败", error);
+          formatAppLog("error", "at pages/orders/detail.vue:812", "加载转派乡镇列表失败", error);
         }
       },
       normalizeStationmasterOptions(source) {
@@ -9517,7 +10412,7 @@ if (uni.restoreGlobal) {
           this.stationmasterOptions = this.normalizeStationmasterOptions(res == null ? void 0 : res.data);
         } catch (error) {
           this.stationmasterOptions = [];
-          formatAppLog("error", "at pages/orders/detail.vue:778", "加载转派站长列表失败", error);
+          formatAppLog("error", "at pages/orders/detail.vue:851", "加载转派站长列表失败", error);
         } finally {
           this.stationmastersLoading = false;
         }
@@ -9545,7 +10440,7 @@ if (uni.restoreGlobal) {
           this.townRiderOptions = this.normalizeTownRiderOptions(res == null ? void 0 : res.data);
         } catch (error) {
           this.townRiderOptions = [];
-          formatAppLog("error", "at pages/orders/detail.vue:813", "加载乡镇骑手列表失败", error);
+          formatAppLog("error", "at pages/orders/detail.vue:886", "加载乡镇骑手列表失败", error);
           uni.showToast({ title: this.getErrorMessage(error) || "加载骑手列表失败", icon: "none" });
         } finally {
           this.townRiderListLoading = false;
@@ -9631,7 +10526,7 @@ if (uni.restoreGlobal) {
               await this.loadOrderDetail();
               this.refreshOrderListPage();
             } catch (error) {
-              formatAppLog("error", "at pages/orders/detail.vue:899", "转给骑手失败", error);
+              formatAppLog("error", "at pages/orders/detail.vue:972", "转给骑手失败", error);
               uni.showToast({ title: this.getErrorMessage(error) || "转单失败", icon: "none" });
             } finally {
               this.townRiderTransferSubmitting = false;
@@ -9641,17 +10536,18 @@ if (uni.restoreGlobal) {
         });
       },
       handleTransferRevoke() {
+        const isStationmasterReject = this.isCountyTransferPoolOrder(this.order) && this.isTownStationmasterUser() && this.safeText(this.order.current_responsible_role) === "town_stationmaster";
         uni.showModal({
-          title: "撤回一次",
-          content: "确认撤回本次转派？",
-          confirmText: "确认撤回",
+          title: isStationmasterReject ? "拒接退回县城" : "撤回一次",
+          content: isStationmasterReject ? "确认拒接这笔县城转入订单，并退回县城继续处理？" : "确认撤回本次转派？",
+          confirmText: isStationmasterReject ? "确认退回" : "确认撤回",
           cancelText: "取消",
           success: async (res) => {
             if (!res.confirm) {
               return;
             }
             await revokeOrderTransfer(this.getTransferOrderIdentifier());
-            uni.showToast({ title: "已撤回转派", icon: "success" });
+            uni.showToast({ title: isStationmasterReject ? "已退回县城" : "已撤回转派", icon: "success" });
             await this.loadOrderDetail();
             this.refreshOrderListPage();
           }
@@ -9747,7 +10643,7 @@ if (uni.restoreGlobal) {
                 uni.showToast({ title: "送达成功", icon: "success" });
                 await this.loadOrderDetail();
               } catch (e) {
-                formatAppLog("error", "at pages/orders/detail.vue:1017", "确认送达失败", e);
+                formatAppLog("error", "at pages/orders/detail.vue:1094", "确认送达失败", e);
               }
             }
           });
@@ -9775,7 +10671,7 @@ if (uni.restoreGlobal) {
                 uni.showToast({ title: "已开始配送", icon: "success" });
                 await this.loadOrderDetail();
               } catch (e) {
-                formatAppLog("error", "at pages/orders/detail.vue:1044", "自配送开始失败", e);
+                formatAppLog("error", "at pages/orders/detail.vue:1121", "自配送开始失败", e);
                 uni.showToast({ title: this.getErrorMessage(e) || "开始配送失败", icon: "none" });
               }
             }
@@ -9800,7 +10696,7 @@ if (uni.restoreGlobal) {
                   uni.showToast({ title: "送达成功", icon: "success" });
                   await this.loadOrderDetail();
                 } catch (e) {
-                  formatAppLog("error", "at pages/orders/detail.vue:1068", "自配送确认送达失败", e);
+                  formatAppLog("error", "at pages/orders/detail.vue:1145", "自配送确认送达失败", e);
                   uni.showToast({ title: this.getErrorMessage(e) || "确认送达失败", icon: "none" });
                 }
               }
@@ -9838,7 +10734,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "操作成功", icon: "success" });
               await this.loadOrderDetail();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/detail.vue:1105", "特殊完结失败", e);
+              formatAppLog("error", "at pages/orders/detail.vue:1182", "特殊完结失败", e);
             }
           }
         });
@@ -9853,6 +10749,13 @@ if (uni.restoreGlobal) {
           return {};
         }
       },
+      parseAddressForOrder(order = {}) {
+        try {
+          return typeof order.delivery_address === "string" ? JSON.parse(order.delivery_address) : order.delivery_address || {};
+        } catch (e) {
+          return {};
+        }
+      },
       getCoordinateByKeys(source, keys) {
         for (let i = 0; i < keys.length; i++) {
           const value2 = source[keys[i]];
@@ -9862,16 +10765,12 @@ if (uni.restoreGlobal) {
         }
         return "";
       },
-      getMerchantCoords() {
-        const address = this.parseAddress();
-        const merchant = this.order.merchant || {};
-        const lng = this.getCoordinateByKeys(merchant, ["lng", "lat_lng", "longitude", "lon", "map_lng", "merchant_lng", "merchantLng"]) || this.getCoordinateByKeys(this.order || {}, ["merchant_lng", "merchantLng", "shop_lng", "shopLng", "store_lng", "storeLng", "pickup_lng", "pickupLng", "from_lng", "fromLng"]) || this.getCoordinateByKeys(address, ["merchant_lng", "shop_lng", "store_lng", "pickup_lng", "from_lng"]);
-        const lat = this.getCoordinateByKeys(merchant, ["lat", "latitude", "map_lat", "merchant_lat", "merchantLat"]) || this.getCoordinateByKeys(this.order || {}, ["merchant_lat", "merchantLat", "shop_lat", "shopLat", "store_lat", "storeLat", "pickup_lat", "pickupLat", "from_lat", "fromLat"]) || this.getCoordinateByKeys(address, ["merchant_lat", "shop_lat", "store_lat", "pickup_lat", "from_lat"]);
-        return { lng, lat };
+      getMerchantCoords(order = this.order) {
+        return getMerchantCoords(order);
       },
-      getPickupMerchantCoords() {
-        const address = this.parseAddress();
-        const orderSnapshot = this.order || {};
+      getPickupMerchantCoords(order = this.order) {
+        const address = this.parseAddressForOrder(order);
+        const orderSnapshot = order || {};
         const merchant = orderSnapshot.merchant || {};
         const lng = this.getCoordinateByKeys(orderSnapshot, ["merchant_lng", "merchantLng", "shop_lng", "shopLng", "store_lng", "storeLng", "pickup_lng", "pickupLng", "from_lng", "fromLng"]) || this.getCoordinateByKeys(merchant, ["merchant_lng", "merchantLng", "lng", "lat_lng", "longitude", "lon", "map_lng"]) || this.getCoordinateByKeys(address, ["merchant_lng", "shop_lng", "store_lng", "pickup_lng", "from_lng"]);
         const lat = this.getCoordinateByKeys(orderSnapshot, ["merchant_lat", "merchantLat", "shop_lat", "shopLat", "store_lat", "storeLat", "pickup_lat", "pickupLat", "from_lat", "fromLat"]) || this.getCoordinateByKeys(merchant, ["merchant_lat", "merchantLat", "lat", "latitude", "map_lat"]) || this.getCoordinateByKeys(address, ["merchant_lat", "shop_lat", "store_lat", "pickup_lat", "from_lat"]);
@@ -9881,7 +10780,7 @@ if (uni.restoreGlobal) {
         var _a, _b;
         try {
           const cached = getCachedRiderCoords();
-          if (hasValidCoords(cached)) {
+          if (hasValidCoords$1(cached)) {
             return cached;
           }
           const app = typeof getApp === "function" ? getApp() : null;
@@ -9906,7 +10805,7 @@ if (uni.restoreGlobal) {
         }
       },
       hasValidCoords(coords = {}) {
-        return hasValidCoords(coords);
+        return hasValidCoords$1(coords);
       },
       async requestNavigationLocation(type = "gcj02", extraOptions = {}) {
         return requestNavigationLocation(type, extraOptions);
@@ -9914,14 +10813,30 @@ if (uni.restoreGlobal) {
       async resolveNavigationStartCoords() {
         return resolveNavigationStartCoords(this.getCachedRiderCoords());
       },
-      getCustomerCoords() {
-        const address = this.parseAddress();
-        const fallback = this.order || {};
-        const lng = this.getCoordinateByKeys(fallback, ["customer_lng", "delivery_longitude", "longitude", "delivery_lng", "deliveryLng", "user_lng", "userLng", "contact_lng", "receiver_lng", "to_lng", "dest_lng", "customerLng"]) || this.getCoordinateByKeys(address, ["customer_lng", "delivery_longitude", "longitude", "lng", "delivery_lng", "deliveryLng", "user_lng", "receiver_lng", "to_lng", "dest_lng", "customerLng"]);
-        const lat = this.getCoordinateByKeys(fallback, ["customer_lat", "delivery_latitude", "latitude", "delivery_lat", "deliveryLat", "user_lat", "userLat", "contact_lat", "receiver_lat", "to_lat", "dest_lat", "customerLat"]) || this.getCoordinateByKeys(address, ["customer_lat", "delivery_latitude", "latitude", "lat", "delivery_lat", "deliveryLat", "user_lat", "receiver_lat", "to_lat", "dest_lat", "customerLat"]);
-        return { lng, lat };
+      setNavigationLocationReportingActive(active = false) {
+        var _a;
+        try {
+          const app = typeof getApp === "function" ? getApp() : null;
+          const setter = (_a = app == null ? void 0 : app.globalData) == null ? void 0 : _a.setNavigationLocationReportingActive;
+          if (typeof setter === "function") {
+            setter(!!active);
+          }
+        } catch (error) {
+        }
+      },
+      getCustomerCoords(order = this.order) {
+        return getCustomerCoords(order);
+      },
+      buildCurrentOverviewOrderSnapshot(stage = "delivery") {
+        const overviewOrders = buildRiderOverviewOrders([this.order], {
+          currentOrderId: this.orderId,
+          user: getUserInfo$1() || {},
+          stage
+        });
+        return overviewOrders[0] || {};
       },
       async navigateToMap(payload) {
+        var _a;
         if (this.navigationLaunching) {
           return;
         }
@@ -9932,12 +10847,6 @@ if (uni.restoreGlobal) {
           uni.showToast({ title: "当前订单状态不可导航", icon: "none" });
           return;
         }
-        const riderId = this.getRiderId();
-        if (!riderId) {
-          uni.showToast({ title: "当前骑手信息缺失，无法导航", icon: "none" });
-          return;
-        }
-        const token = uni.getStorageSync("token") || "";
         const stage = payload && payload.stage === "delivery" ? "delivery" : "pickup";
         const targetCoords = stage === "delivery" ? { lng: payload == null ? void 0 : payload.customerLng, lat: payload == null ? void 0 : payload.customerLat } : { lng: payload == null ? void 0 : payload.merchantLng, lat: payload == null ? void 0 : payload.merchantLat };
         const missingTargets = [];
@@ -9945,7 +10854,7 @@ if (uni.restoreGlobal) {
           missingTargets.push(stage === "delivery" ? "用户" : "商家");
         }
         if (missingTargets.length) {
-          formatAppLog("warn", "at pages/orders/detail.vue:1225", "[order-detail] navigation coords missing", {
+          formatAppLog("warn", "at pages/orders/detail.vue:1314", "[order-detail] navigation coords missing", {
             stage,
             missingTargets,
             merchantLng: (payload == null ? void 0 : payload.merchantLng) || "",
@@ -9960,12 +10869,16 @@ if (uni.restoreGlobal) {
           return;
         }
         this.navigationLaunching = true;
+        const cachedRider = this.getCachedRiderCoords();
+        const hasCachedRider = this.hasValidCoords(cachedRider);
+        this.setNavigationLocationReportingActive(true);
         uni.showLoading({
-          title: "正在获取定位",
+          title: hasCachedRider ? "正在进入地图总览" : "正在获取定位",
           mask: true
         });
-        const rider = await this.resolveNavigationStartCoords();
-        if (!this.hasValidCoords(rider)) {
+        const rider = stage === "delivery" ? hasCachedRider ? cachedRider : { lng: "", lat: "" } : hasCachedRider ? cachedRider : await this.resolveNavigationStartCoords();
+        if (stage === "pickup" && !this.hasValidCoords(rider)) {
+          this.setNavigationLocationReportingActive(false);
           this.navigationLaunching = false;
           uni.hideLoading();
           uni.showToast({
@@ -9980,12 +10893,71 @@ if (uni.restoreGlobal) {
         const safeMerchantLat = payload && payload.merchantLat !== void 0 && payload.merchantLat !== null && payload.merchantLat !== "" ? String(payload.merchantLat) : "";
         const safeCustomerLng = payload && payload.customerLng !== void 0 && payload.customerLng !== null && payload.customerLng !== "" ? String(payload.customerLng) : "";
         const safeCustomerLat = payload && payload.customerLat !== void 0 && payload.customerLat !== null && payload.customerLat !== "" ? String(payload.customerLat) : "";
+        if (stage === "pickup") {
+          try {
+            uni.showLoading({
+              title: "正在打开商家导航",
+              mask: true
+            });
+            const result = await startTencentNavigation({
+              stage,
+              riderLng: safeRiderLng,
+              riderLat: safeRiderLat,
+              merchantLng: safeMerchantLng,
+              merchantLat: safeMerchantLat,
+              customerLng: safeCustomerLng,
+              customerLat: safeCustomerLat
+            });
+            if (result && result.success) {
+              uni.showToast({
+                title: "已打开取餐导航",
+                icon: "success"
+              });
+              return;
+            }
+            uni.showToast({
+              title: (result == null ? void 0 : result.message) || "打开商家导航失败",
+              icon: "none"
+            });
+            return;
+          } catch (error) {
+            this.setNavigationLocationReportingActive(false);
+            uni.showToast({
+              title: (error == null ? void 0 : error.message) || "打开商家导航失败",
+              icon: "none"
+            });
+            return;
+          } finally {
+            this.setNavigationLocationReportingActive(false);
+            this.navigationLaunching = false;
+            uni.hideLoading();
+          }
+        }
+        const currentOverviewOrder = this.buildCurrentOverviewOrderSnapshot(stage);
+        const overviewPayload = {
+          stage,
+          orderId: safeText$5(this.orderId),
+          orderNo: safeText$5((_a = this.order) == null ? void 0 : _a.order_no),
+          merchantName: safeText$5(currentOverviewOrder.merchantName),
+          privacyContactName: safeText$5(currentOverviewOrder.privacyContactName),
+          privacyContactPhone: safeText$5(currentOverviewOrder.privacyContactPhone),
+          goodsSummaryList: Array.isArray(currentOverviewOrder.goodsSummaryList) ? currentOverviewOrder.goodsSummaryList : [],
+          riderLng: safeRiderLng,
+          riderLat: safeRiderLat,
+          merchantLng: safeMerchantLng,
+          merchantLat: safeMerchantLat,
+          customerLng: safeCustomerLng,
+          customerLat: safeCustomerLat
+        };
         uni.showLoading({
-          title: "正在进入导航",
+          title: "正在进入地图总览",
           mask: true
         });
         uni.navigateTo({
-          url: `/pages/map/nav?riderId=${encodeURIComponent(riderId)}&token=${encodeURIComponent(token)}&stage=${encodeURIComponent(stage)}&riderLng=${encodeURIComponent(safeRiderLng)}&riderLat=${encodeURIComponent(safeRiderLat)}&merchantLng=${encodeURIComponent(safeMerchantLng)}&merchantLat=${encodeURIComponent(safeMerchantLat)}&customerLng=${encodeURIComponent(safeCustomerLng)}&customerLat=${encodeURIComponent(safeCustomerLat)}`,
+          url: `/pages/map/nav?payload=${encodeURIComponent(JSON.stringify(overviewPayload))}`,
+          fail: () => {
+            this.setNavigationLocationReportingActive(false);
+          },
           complete: () => {
             this.navigationLaunching = false;
             uni.hideLoading();
@@ -10004,6 +10976,14 @@ if (uni.restoreGlobal) {
         });
       },
       goDelivery() {
+        var _a;
+        if (!this.canAccessDeliveryNavigation((_a = this.order) == null ? void 0 : _a.status)) {
+          uni.showToast({
+            title: "订单还没进入配送中，请先取餐",
+            icon: "none"
+          });
+          return;
+        }
         const merchant = this.getMerchantCoords();
         const customer = this.getCustomerCoords();
         this.navigateToMap({
@@ -10057,7 +11037,7 @@ ${coordText}` : searchText;
         if (!this.ensureOrderOwnership("取餐")) {
           return;
         }
-        formatAppLog("log", "at pages/orders/detail.vue:1344", "[order-detail] handlePickup before confirm", {
+        formatAppLog("log", "at pages/orders/detail.vue:1517", "[order-detail] handlePickup before confirm", {
           requestOrderId: this.orderId,
           orderStatus: ((_a = this.order) == null ? void 0 : _a.status) ?? "",
           canPickup: this.canPickup((_b = this.order) == null ? void 0 : _b.status)
@@ -10083,12 +11063,12 @@ ${coordText}` : searchText;
               uni.showToast({ title: "已开始配送", icon: "success" });
               await this.loadOrderDetail();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/detail.vue:1368", "[order-detail] riderPickup failed", {
+              formatAppLog("error", "at pages/orders/detail.vue:1541", "[order-detail] riderPickup failed", {
                 httpStatus: this.getErrorStatusCode(e),
                 message: this.getErrorMessage(e),
                 data: (e == null ? void 0 : e.data) ?? ((_a2 = e == null ? void 0 : e.response) == null ? void 0 : _a2.data) ?? null
               });
-              formatAppLog("error", "at pages/orders/detail.vue:1373", "取餐失败", e);
+              formatAppLog("error", "at pages/orders/detail.vue:1546", "取餐失败", e);
             }
           }
         });
@@ -10258,6 +11238,32 @@ ${coordText}` : searchText;
             /* TEXT */
           )
         ]),
+        $options.isCountyTransferPoolOrder($data.order) ? (vue.openBlock(), vue.createElementBlock("view", {
+          key: 0,
+          class: "info-row"
+        }, [
+          vue.createElementVNode("text", { class: "label" }, "履约池"),
+          vue.createElementVNode(
+            "text",
+            { class: "value" },
+            vue.toDisplayString($options.getTransferPoolText($data.order)),
+            1
+            /* TEXT */
+          )
+        ])) : vue.createCommentVNode("v-if", true),
+        $options.isCountyTransferPoolOrder($data.order) ? (vue.openBlock(), vue.createElementBlock("view", {
+          key: 1,
+          class: "info-row"
+        }, [
+          vue.createElementVNode("text", { class: "label" }, "当前归属"),
+          vue.createElementVNode(
+            "text",
+            { class: "value" },
+            vue.toDisplayString($options.getDeliveryDomainText($data.order.current_delivery_domain)),
+            1
+            /* TEXT */
+          )
+        ])) : vue.createCommentVNode("v-if", true),
         vue.createElementVNode("view", { class: "info-row" }, [
           vue.createElementVNode("text", { class: "label" }, "目标乡镇"),
           vue.createElementVNode(
@@ -10269,7 +11275,7 @@ ${coordText}` : searchText;
           )
         ]),
         $options.getAssignedTownRiderName($data.order) ? (vue.openBlock(), vue.createElementBlock("view", {
-          key: 0,
+          key: 2,
           class: "info-row"
         }, [
           vue.createElementVNode("text", { class: "label" }, "当前配送人"),
@@ -10282,7 +11288,7 @@ ${coordText}` : searchText;
           )
         ])) : vue.createCommentVNode("v-if", true),
         $options.getTransferFromUserName($data.order) ? (vue.openBlock(), vue.createElementBlock("view", {
-          key: 1,
+          key: 3,
           class: "info-row"
         }, [
           vue.createElementVNode("text", { class: "label" }, "转派来源"),
@@ -10339,11 +11345,17 @@ ${coordText}` : searchText;
           class: "btn btn-transfer",
           onClick: _cache[6] || (_cache[6] = (...args) => $options.openTransferDialog && $options.openTransferDialog(...args))
         }, " 转派给乡镇站长 ")) : vue.createCommentVNode("v-if", true),
-        $options.canShowTransferRevokeAction ? (vue.openBlock(), vue.createElementBlock("button", {
-          key: 2,
-          class: "btn btn-revoke",
-          onClick: _cache[7] || (_cache[7] = (...args) => $options.handleTransferRevoke && $options.handleTransferRevoke(...args))
-        }, " 撤回一次 ")) : vue.createCommentVNode("v-if", true),
+        $options.canShowTransferRevokeAction ? (vue.openBlock(), vue.createElementBlock(
+          "button",
+          {
+            key: 2,
+            class: "btn btn-revoke",
+            onClick: _cache[7] || (_cache[7] = (...args) => $options.handleTransferRevoke && $options.handleTransferRevoke(...args))
+          },
+          vue.toDisplayString($options.getTransferRevokeButtonText()),
+          1
+          /* TEXT */
+        )) : vue.createCommentVNode("v-if", true),
         $options.showPrimaryDeliveryAction ? (vue.openBlock(), vue.createElementBlock("button", {
           key: 3,
           class: "btn btn-success",
@@ -10380,204 +11392,775 @@ ${coordText}` : searchText;
     ]);
   }
   const PagesOrdersDetail = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$c], ["__scopeId", "data-v-bc4602bd"], ["__file", "E:/固始县外卖骑手端/pages/orders/detail.vue"]]);
-  const TENCENT_NAV_STAGE = {
-    PICKUP: "pickup",
-    DELIVERY: "delivery"
-  };
-  function normalizeTestParams(input = {}) {
-    const stage = input.stage === TENCENT_NAV_STAGE.DELIVERY ? TENCENT_NAV_STAGE.DELIVERY : TENCENT_NAV_STAGE.PICKUP;
-    return {
-      stage,
-      orderId: String(input.orderId || ""),
-      riderLng: toNumber(input.riderLng),
-      riderLat: toNumber(input.riderLat),
-      merchantLng: toNumber(input.merchantLng),
-      merchantLat: toNumber(input.merchantLat),
-      customerLng: toNumber(input.customerLng),
-      customerLat: toNumber(input.customerLat)
-    };
+  const TENCENT_MAP_WEB_KEY = "V73BZ-NI3LQ-OYZ5D-BYCOD-D6RQH-KGBEU";
+  const OVERVIEW_BRIDGE_STORAGE_KEY = "__rider_overview_bridge_message__";
+  const OVERVIEW_HOST_PAYLOAD_STORAGE_KEY = "__rider_overview_host_payload__";
+  function safeText$4(value2) {
+    if (value2 === void 0 || value2 === null) {
+      return "";
+    }
+    return String(value2).trim();
   }
-  function toNumber(value2) {
-    const num = Number(value2);
-    return Number.isFinite(num) ? num : 0;
+  function normalizeTencentTargetCoords(lng, lat, coordType = "wgs84") {
+    const parsedLng = Number(lng);
+    const parsedLat = Number(lat);
+    if (!hasValidCoords$1({ lng: parsedLng, lat: parsedLat })) {
+      return { lng: "", lat: "" };
+    }
+    if (safeText$4(coordType).toLowerCase() === "gcj02") {
+      return { lng: parsedLng, lat: parsedLat };
+    }
+    const converted = wgs84ToGcj02(parsedLng, parsedLat);
+    if (!hasValidCoords$1(converted)) {
+      return { lng: "", lat: "" };
+    }
+    return converted;
   }
-  function getTencentNativeModule() {
-    try {
-      return requireNativePlugin("TencentNaviModule");
-    } catch (error) {
-      return null;
+  function getAppPlusBridge() {
+    if (typeof plus !== "undefined") {
+      return plus;
+    }
+    if (typeof window !== "undefined" && window.plus) {
+      return window.plus;
     }
     return null;
   }
-  function startTencentNativeNavigation(params = {}) {
-    const normalized = normalizeTestParams(params);
-    const module = getTencentNativeModule();
-    if (!module) {
-      return Promise.resolve({
-        success: false,
-        code: "MODULE_UNAVAILABLE",
-        message: "腾讯原生导航插件未注册，当前只能完成测试参数验证",
-        params: normalized
-      });
-    }
-    return new Promise((resolve) => {
-      try {
-        module.startNavigation(normalized, (result) => {
-          resolve({
-            success: !!(result && (result.success || result.code === 0)),
-            code: result && result.code !== void 0 ? result.code : "UNKNOWN",
-            message: result && result.message ? result.message : "腾讯原生导航已返回结果",
-            raw: result || null,
-            params: normalized
-          });
-        });
-      } catch (error) {
-        resolve({
-          success: false,
-          code: "NATIVE_CALL_ERROR",
-          message: error && error.message ? error.message : "调用腾讯原生导航插件异常",
-          params: normalized
-        });
-      }
-    });
-  }
-  function startTencentNavigation(params = {}) {
-    return startTencentNativeNavigation(params);
+  function encodeQueryValue(value2) {
+    return encodeURIComponent(value2 == null ? "" : String(value2));
   }
   const _sfc_main$c = {
+    onBackPress(options = {}) {
+      if (options.from === "navigateBack") {
+        return false;
+      }
+      this.goBack();
+      return true;
+    },
     data() {
       return {
         stage: "pickup",
+        entryOrderId: "",
+        orderId: "",
+        orderNo: "",
         riderLng: "",
         riderLat: "",
         merchantLng: "",
         merchantLat: "",
         customerLng: "",
         customerLat: "",
-        failed: false,
+        currentMerchantName: "",
+        currentPrivacyContactName: "",
+        currentPrivacyContactPhone: "",
+        currentGoodsSummaryList: [],
+        overviewOrders: [],
+        selectedOrderId: "",
+        selectedOrderRecord: null,
+        overviewUrl: "",
+        refreshing: false,
         launching: false,
-        launchFinished: false,
-        statusText: "正在进入配送界面..."
+        confirmSubmitting: false,
+        backingToOrders: false,
+        hasManualSelection: false,
+        statusText: "正在准备腾讯地图总览...",
+        bridgePollTimer: null,
+        lastBridgeToken: "",
+        overviewReadyAt: 0
       };
     },
     computed: {
       stageLabel() {
-        return this.stage === "delivery" ? "送餐" : "取餐";
+        return this.stage === "delivery" ? "去送货" : "去取餐";
       },
       pageTitle() {
-        return this.stage === "delivery" ? "正在进入送货导航" : "正在进入取餐导航";
+        return this.stage === "delivery" ? "腾讯配送总览" : "腾讯导航";
+      },
+      currentOrderLabel() {
+        const orderNo = safeText$4(this.selectedOrder && this.selectedOrder.orderNo || this.orderNo);
+        return orderNo ? `尾号${orderNo.slice(-4)}` : "当前订单";
+      },
+      activeOrderCount() {
+        return Array.isArray(this.overviewOrders) ? this.overviewOrders.length : 0;
+      },
+      selectedOrder() {
+        return this.selectedOrderRecord || findOverviewOrder(this.overviewOrders, this.selectedOrderId) || findOverviewOrder(this.overviewOrders, this.orderId) || null;
+      },
+      showStartNavigationButton() {
+        if (this.stage !== "delivery") {
+          return true;
+        }
+        return this.hasManualSelection && !!this.selectedOrder;
+      },
+      startButtonText() {
+        if (this.stage !== "delivery") {
+          return "导航当前单";
+        }
+        return this.selectedOrder ? `开始导航 ${this.currentOrderLabel}` : "开始导航";
+      },
+      hintText() {
+        if (this.stage !== "delivery") {
+          return "取餐阶段直接进入当前商家导航，这里不展示多用户送货总览。";
+        }
+        if (!this.activeOrderCount) {
+          return "当前还没拉到配送中的订单，先点右下角刷新总览。";
+        }
+        if (this.hasManualSelection && this.selectedOrder) {
+          return `当前已选中 ${this.currentOrderLabel}，底部白卡片里可以确认送达或开始导航。`;
+        }
+        if (this.selectedOrder) {
+          return "地图上只显示该骑手已取餐、配送中的订单，先点红色或紫色用户点位，再用底部白卡片操作。";
+        }
+        return "地图上只显示该骑手已取餐、配送中的订单，点任意红色或紫色用户点位后，底部白卡片里会出现操作按钮。";
       }
     },
-    onLoad(options) {
-      const payload = options || {};
-      this.stage = payload.stage === "delivery" ? "delivery" : "pickup";
-      this.riderLng = payload.startLng || payload.riderLng || "";
-      this.riderLat = payload.startLat || payload.riderLat || "";
-      this.merchantLng = payload.merchantLng || "";
-      this.merchantLat = payload.merchantLat || "";
-      this.customerLng = payload.customerLng || "";
-      this.customerLat = payload.customerLat || "";
-      this.startNavigation();
+    async onLoad(options = {}) {
+      this.applyOverviewPayload(options);
+      this.setNavigationLocationReportingActive(true);
+      this.primeOverviewShell();
+      this.initializeOverview();
+      this.startOverviewBridgePolling();
+    },
+    onReady() {
+      this.startOverviewBridgePolling();
+    },
+    onShow() {
+      if (this.stage === "delivery") {
+        if (Date.now() - this.overviewReadyAt < 1500) {
+          return;
+        }
+        this.refreshOverview();
+      }
+    },
+    onUnload() {
+      this.setNavigationLocationReportingActive(false);
+      this.stopOverviewBridgePolling();
     },
     methods: {
+      setNavigationLocationReportingActive(active = false) {
+        var _a;
+        try {
+          const app = typeof getApp === "function" ? getApp() : null;
+          const setter = (_a = app == null ? void 0 : app.globalData) == null ? void 0 : _a.setNavigationLocationReportingActive;
+          if (typeof setter === "function") {
+            setter(!!active);
+          }
+        } catch (error) {
+        }
+      },
+      startOverviewBridgePolling() {
+        if (this.bridgePollTimer) {
+          return;
+        }
+        this.bridgePollTimer = setInterval(() => {
+          this.consumeOverviewBridgeStorage();
+        }, 280);
+        this.consumeOverviewBridgeStorage();
+      },
+      stopOverviewBridgePolling() {
+        if (!this.bridgePollTimer) {
+          return;
+        }
+        clearInterval(this.bridgePollTimer);
+        this.bridgePollTimer = null;
+      },
+      consumeOverviewBridgeStorage() {
+        try {
+          const appPlus = getAppPlusBridge();
+          if (!appPlus || !appPlus.storage) {
+            return;
+          }
+          const rawText = appPlus.storage.getItem(OVERVIEW_BRIDGE_STORAGE_KEY);
+          if (!rawText) {
+            return;
+          }
+          const message = JSON.parse(rawText);
+          const token = safeText$5(message && message.token);
+          if (!token || token === this.lastBridgeToken) {
+            return;
+          }
+          this.lastBridgeToken = token;
+          appPlus.storage.removeItem(OVERVIEW_BRIDGE_STORAGE_KEY);
+          this.processOverviewMessage(message);
+        } catch (error) {
+        }
+      },
+      applyOverviewPayload(options = {}) {
+        let payload = {};
+        try {
+          payload = options.payload ? JSON.parse(decodeURIComponent(options.payload)) : {};
+        } catch (error) {
+          payload = {};
+        }
+        this.stage = payload.stage === "delivery" ? "delivery" : "pickup";
+        this.entryOrderId = safeText$4(payload.orderId);
+        this.orderId = safeText$4(payload.orderId);
+        this.orderNo = safeText$4(payload.orderNo);
+        this.riderLng = safeText$4(payload.riderLng);
+        this.riderLat = safeText$4(payload.riderLat);
+        this.merchantLng = safeText$4(payload.merchantLng);
+        this.merchantLat = safeText$4(payload.merchantLat);
+        this.customerLng = safeText$4(payload.customerLng);
+        this.customerLat = safeText$4(payload.customerLat);
+        this.currentMerchantName = safeText$4(payload.merchantName);
+        this.currentPrivacyContactName = safeText$4(payload.privacyContactName);
+        this.currentPrivacyContactPhone = safeText$4(payload.privacyContactPhone);
+        this.currentGoodsSummaryList = Array.isArray(payload.goodsSummaryList) ? payload.goodsSummaryList.map((item) => safeText$4(item)).filter(Boolean) : [];
+        this.selectedOrderId = safeText$4(payload.orderId);
+        this.hasManualSelection = false;
+      },
+      getDeliveryListStatusKey() {
+        const user = getUserInfo$1() || {};
+        const profile = resolveDeliveryProfile(user);
+        if (profile == null ? void 0 : profile.isMerchantSelfDelivery) {
+          return "merchant_delivery_delivering";
+        }
+        if ((profile == null ? void 0 : profile.isTownScope) || (profile == null ? void 0 : profile.isTownStationmaster)) {
+          return "town_delivering";
+        }
+        if (profile == null ? void 0 : profile.useSimplifiedTabs) {
+          return "county_delivering";
+        }
+        return "5";
+      },
+      buildDeliveringListUrl() {
+        const status = safeText$4(this.getDeliveryListStatusKey());
+        return status ? `/pages/orders/index?status=${encodeURIComponent(status)}` : "/pages/orders/index";
+      },
+      async initializeOverview() {
+        try {
+          const rider = await this.resolveRiderPosition();
+          if (hasValidCoords$1(rider)) {
+            this.riderLng = String(rider.lng);
+            this.riderLat = String(rider.lat);
+          }
+        } catch (error) {
+        }
+        await this.loadOverviewOrders();
+        this.buildOverviewUrl();
+        this.overviewReadyAt = Date.now();
+      },
+      primeOverviewShell() {
+        this.overviewOrders = this.applyOverviewOrderFallback([], []);
+        this.syncSelectionAfterLoad();
+        this.updateStatusText();
+        this.buildOverviewUrl();
+        this.overviewReadyAt = Date.now();
+      },
+      async loadOverviewOrders() {
+        const user = getUserInfo$1() || {};
+        try {
+          const res = await getRiderOrders({}, { silent: true });
+          const list = extractRiderOrderList(res);
+          const overviewOrders = buildRiderOverviewOrders(list, {
+            currentOrderId: this.orderId,
+            user,
+            stage: this.stage
+          });
+          this.overviewOrders = this.applyOverviewOrderFallback(overviewOrders, list);
+          this.syncSelectionAfterLoad();
+          this.updateStatusText();
+        } catch (error) {
+          formatAppLog("error", "at pages/map/nav.vue:370", "加载骑手地图总览订单失败", error);
+          this.overviewOrders = this.applyOverviewOrderFallback([], []);
+          this.syncSelectionAfterLoad();
+          this.updateStatusText((error == null ? void 0 : error.message) || "活跃订单加载失败");
+        }
+      },
+      buildCurrentOrderFallbackRecord() {
+        const fallbackOrder = {
+          id: safeText$4(this.orderId),
+          orderNo: safeText$4(this.orderNo),
+          label: "",
+          status: this.stage === "delivery" ? 5 : 4,
+          statusText: this.stage === "delivery" ? "配送中" : "待取餐",
+          merchantName: safeText$4(this.currentMerchantName),
+          privacyContactName: safeText$4(this.currentPrivacyContactName),
+          privacyContactPhone: safeText$4(this.currentPrivacyContactPhone),
+          goodsSummaryList: Array.isArray(this.currentGoodsSummaryList) ? this.currentGoodsSummaryList : [],
+          merchantLng: safeText$4(this.merchantLng),
+          merchantLat: safeText$4(this.merchantLat),
+          customerLng: safeText$4(this.customerLng),
+          customerLat: safeText$4(this.customerLat),
+          isCurrent: true
+        };
+        if (!fallbackOrder.id) {
+          return null;
+        }
+        const targetCoords = this.stage === "delivery" ? { lng: fallbackOrder.customerLng, lat: fallbackOrder.customerLat } : { lng: fallbackOrder.merchantLng, lat: fallbackOrder.merchantLat };
+        if (!hasValidCoords$1(targetCoords)) {
+          formatAppLog("warn", "at pages/map/nav.vue:408", "[map-nav] 当前单兜底失败：入口坐标无效", {
+            stage: this.stage,
+            orderId: fallbackOrder.id,
+            orderNo: fallbackOrder.orderNo,
+            merchantLng: fallbackOrder.merchantLng,
+            merchantLat: fallbackOrder.merchantLat,
+            customerLng: fallbackOrder.customerLng,
+            customerLat: fallbackOrder.customerLat
+          });
+          return null;
+        }
+        fallbackOrder.label = fallbackOrder.orderNo ? `尾号${fallbackOrder.orderNo.slice(-4)}` : "当前订单";
+        return fallbackOrder;
+      },
+      applyOverviewOrderFallback(overviewOrders = [], rawOrderList = []) {
+        if (Array.isArray(overviewOrders) && overviewOrders.length > 0) {
+          formatAppLog("log", "at pages/map/nav.vue:424", "[map-nav] 总览订单加载完成", {
+            stage: this.stage,
+            currentOrderId: this.orderId,
+            rawOrderCount: Array.isArray(rawOrderList) ? rawOrderList.length : 0,
+            overviewOrderCount: overviewOrders.length,
+            statuses: Array.isArray(rawOrderList) ? rawOrderList.map((item) => Number((item == null ? void 0 : item.status) || 0)) : []
+          });
+          return overviewOrders;
+        }
+        const fallbackOrder = this.buildCurrentOrderFallbackRecord();
+        if (!fallbackOrder) {
+          formatAppLog("warn", "at pages/map/nav.vue:437", "[map-nav] 总览订单为空，且当前单无法兜底", {
+            stage: this.stage,
+            currentOrderId: this.orderId,
+            currentOrderNo: this.orderNo,
+            rawOrderCount: Array.isArray(rawOrderList) ? rawOrderList.length : 0,
+            statuses: Array.isArray(rawOrderList) ? rawOrderList.map((item) => Number((item == null ? void 0 : item.status) || 0)) : []
+          });
+          return [];
+        }
+        formatAppLog("warn", "at pages/map/nav.vue:448", "[map-nav] 总览订单为空，已回退到当前单兜底显示", {
+          stage: this.stage,
+          currentOrderId: fallbackOrder.id,
+          currentOrderNo: fallbackOrder.orderNo,
+          rawOrderCount: Array.isArray(rawOrderList) ? rawOrderList.length : 0,
+          statuses: Array.isArray(rawOrderList) ? rawOrderList.map((item) => Number((item == null ? void 0 : item.status) || 0)) : []
+        });
+        return [fallbackOrder];
+      },
+      syncSelectionAfterLoad() {
+        if (this.selectedOrderRecord && this.selectedOrderId) {
+          const latest = findOverviewOrder(this.overviewOrders, this.selectedOrderId);
+          if (latest) {
+            this.applySelectedOrder({
+              ...latest,
+              customerLng: this.selectedOrderRecord.customerLng || latest.customerLng,
+              customerLat: this.selectedOrderRecord.customerLat || latest.customerLat,
+              merchantLng: this.selectedOrderRecord.merchantLng || latest.merchantLng,
+              merchantLat: this.selectedOrderRecord.merchantLat || latest.merchantLat
+            });
+            return;
+          }
+        }
+        const selected = findOverviewOrder(this.overviewOrders, this.selectedOrderId) || findOverviewOrder(this.overviewOrders, this.orderId) || this.overviewOrders[0] || null;
+        if (!selected) {
+          return;
+        }
+        this.applySelectedOrder(selected);
+      },
+      applySelectedOrder(order = {}) {
+        const normalizedOrder = {
+          id: safeText$5(order.id),
+          orderNo: safeText$5(order.orderNo),
+          label: safeText$5(order.label),
+          status: Number(order.status || 0),
+          statusText: safeText$5(order.statusText),
+          merchantName: safeText$5(order.merchantName),
+          privacyContactName: safeText$5(order.privacyContactName),
+          privacyContactPhone: safeText$5(order.privacyContactPhone),
+          goodsSummaryList: Array.isArray(order.goodsSummaryList) ? order.goodsSummaryList.map((item) => safeText$5(item)).filter(Boolean) : [],
+          merchantLng: safeText$5(order.merchantLng),
+          merchantLat: safeText$5(order.merchantLat),
+          merchantCoordType: safeText$5(order.merchantCoordType || "wgs84") || "wgs84",
+          customerLng: safeText$5(order.customerLng),
+          customerLat: safeText$5(order.customerLat),
+          customerCoordType: safeText$5(order.customerCoordType || "wgs84") || "wgs84",
+          isCurrent: !!order.isCurrent
+        };
+        this.selectedOrderRecord = normalizedOrder;
+        this.selectedOrderId = normalizedOrder.id;
+        this.orderId = normalizedOrder.id;
+        this.orderNo = normalizedOrder.orderNo;
+        this.currentMerchantName = normalizedOrder.merchantName;
+        this.currentPrivacyContactName = normalizedOrder.privacyContactName;
+        this.currentPrivacyContactPhone = normalizedOrder.privacyContactPhone;
+        this.currentGoodsSummaryList = Array.isArray(normalizedOrder.goodsSummaryList) ? normalizedOrder.goodsSummaryList : [];
+        if (normalizedOrder.customerLng) {
+          this.customerLng = normalizedOrder.customerLng;
+        }
+        if (normalizedOrder.customerLat) {
+          this.customerLat = normalizedOrder.customerLat;
+        }
+        if (normalizedOrder.merchantLng) {
+          this.merchantLng = normalizedOrder.merchantLng;
+        }
+        if (normalizedOrder.merchantLat) {
+          this.merchantLat = normalizedOrder.merchantLat;
+        }
+      },
+      buildSelectedOrderFromPayload(payload = {}) {
+        const fallbackOrder = this.buildFallbackSelectedOrder(payload);
+        if (!fallbackOrder) {
+          return null;
+        }
+        const latestOrder = findOverviewOrder(this.overviewOrders, payload.orderId);
+        return {
+          ...latestOrder || {},
+          ...fallbackOrder,
+          customerLng: fallbackOrder.customerLng || safeText$5(latestOrder && latestOrder.customerLng),
+          customerLat: fallbackOrder.customerLat || safeText$5(latestOrder && latestOrder.customerLat),
+          merchantLng: fallbackOrder.merchantLng || safeText$5(latestOrder && latestOrder.merchantLng),
+          merchantLat: fallbackOrder.merchantLat || safeText$5(latestOrder && latestOrder.merchantLat)
+        };
+      },
+      updateStatusText(fallback = "") {
+        if (fallback) {
+          this.statusText = fallback;
+          return;
+        }
+        if (!this.activeOrderCount) {
+          this.statusText = this.stage === "delivery" ? "当前没有可展示的配送中订单" : "当前没有可展示的取餐订单";
+          return;
+        }
+        if (this.stage === "delivery" && this.hasManualSelection && this.selectedOrder) {
+          this.statusText = `已选中 ${this.currentOrderLabel}，请点下方开始导航`;
+          return;
+        }
+        if (this.selectedOrder) {
+          this.statusText = this.stage === "delivery" ? `当前共 ${this.activeOrderCount} 个配送中订单，请先点地图上的用户点位` : `当前共 ${this.activeOrderCount} 个可导航订单，地图已默认选中 ${this.currentOrderLabel}`;
+          return;
+        }
+        this.statusText = this.stage === "delivery" ? `当前共 ${this.activeOrderCount} 个配送中订单，请先点地图上的用户点位` : `当前共 ${this.activeOrderCount} 个可导航订单，请先点地图上的点位`;
+      },
+      buildOverviewPayload() {
+        return {
+          stage: this.stage,
+          orderId: this.orderId,
+          orderNo: this.orderNo,
+          riderLng: this.riderLng,
+          riderLat: this.riderLat,
+          riderCoordType: "gcj02",
+          merchantLng: this.merchantLng,
+          merchantLat: this.merchantLat,
+          merchantCoordType: "wgs84",
+          customerLng: this.customerLng,
+          customerLat: this.customerLat,
+          customerCoordType: "wgs84",
+          selectedOrderId: this.selectedOrderId || this.orderId,
+          orders: this.overviewOrders
+        };
+      },
+      pushOverviewPayloadToEmbeddedPage() {
+        try {
+          const appPlus = getAppPlusBridge();
+          if (!appPlus || !appPlus.storage) {
+            return false;
+          }
+          appPlus.storage.setItem(OVERVIEW_HOST_PAYLOAD_STORAGE_KEY, JSON.stringify({
+            token: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            payload: this.buildOverviewPayload()
+          }));
+          return true;
+        } catch (error) {
+          return false;
+        }
+      },
+      buildOverviewUrl(forceReload = false) {
+        const mapKey = safeText$4(TENCENT_MAP_WEB_KEY);
+        const remoteOverviewBaseUrl = `${safeText$4(BASE_URL).replace(/\/$/, "")}/rider-map-overview/index.html`;
+        if (!mapKey) {
+          this.overviewUrl = "";
+          return;
+        }
+        if (!safeText$4(BASE_URL)) {
+          this.overviewUrl = "";
+          return;
+        }
+        const payload = this.buildOverviewPayload();
+        this.pushOverviewPayloadToEmbeddedPage();
+        if (!forceReload && this.overviewUrl) {
+          return;
+        }
+        const query = [
+          `key=${encodeQueryValue(mapKey)}`,
+          `payload=${encodeQueryValue(JSON.stringify(payload))}`
+        ];
+        this.overviewUrl = `${remoteOverviewBaseUrl}?${query.join("&")}`;
+      },
+      async refreshOverview() {
+        if (this.refreshing) {
+          return;
+        }
+        this.refreshing = true;
+        try {
+          const rider = await this.resolveRiderPosition();
+          if (hasValidCoords$1(rider)) {
+            this.riderLng = String(rider.lng);
+            this.riderLat = String(rider.lat);
+          }
+          await this.loadOverviewOrders();
+          this.buildOverviewUrl();
+        } catch (error) {
+          uni.showToast({
+            title: (error == null ? void 0 : error.message) || "刷新总览失败",
+            icon: "none"
+          });
+        } finally {
+          this.refreshing = false;
+        }
+      },
+      notifyOrderRefresh(orderId = "") {
+        uni.$emit(REMINDER_CENTER_EVENTS.orderRefresh, {
+          source: "map-nav-confirm-delivery",
+          orderId: safeText$4(orderId)
+        });
+      },
+      clearConfirmedSelection(confirmedOrderId = "") {
+        const normalizedId = safeText$4(confirmedOrderId);
+        if (!normalizedId) {
+          return;
+        }
+        if (safeText$4(this.selectedOrderId) === normalizedId || safeText$4(this.orderId) === normalizedId) {
+          this.selectedOrderId = "";
+          this.selectedOrderRecord = null;
+          this.orderId = "";
+          this.orderNo = "";
+          this.hasManualSelection = false;
+        }
+      },
+      async submitConfirmDeliveryForOrder(targetOrder = {}) {
+        if (this.confirmSubmitting) {
+          return;
+        }
+        const normalizedOrder = targetOrder && typeof targetOrder === "object" ? targetOrder : {};
+        const confirmedOrderId = safeText$4(normalizedOrder.id || this.orderId);
+        if (!confirmedOrderId) {
+          uni.showToast({
+            title: "请先点一个用户坐标",
+            icon: "none"
+          });
+          return;
+        }
+        if (!canRiderCallConfirmDeliveryApi(normalizedOrder.status)) {
+          uni.showToast({
+            title: "订单未处于配送中，暂不能确认送达",
+            icon: "none"
+          });
+          return;
+        }
+        this.confirmSubmitting = true;
+        try {
+          await confirmDelivery(confirmedOrderId);
+          this.clearConfirmedSelection(confirmedOrderId);
+          await this.loadOverviewOrders();
+          this.notifyOrderRefresh(confirmedOrderId);
+          uni.showToast({
+            title: "已确认送达",
+            icon: "success"
+          });
+        } catch (error) {
+          formatAppLog("error", "at pages/map/nav.vue:711", "总览页确认送达失败", error);
+          uni.showToast({
+            title: (error == null ? void 0 : error.message) || "确认送达失败",
+            icon: "none"
+          });
+        } finally {
+          this.confirmSubmitting = false;
+        }
+      },
+      async resolveRiderPosition() {
+        const existing = {
+          lng: Number(this.riderLng),
+          lat: Number(this.riderLat)
+        };
+        if (hasValidCoords$1(existing)) {
+          return existing;
+        }
+        const cached = getCachedRiderCoords();
+        if (hasValidCoords$1(cached)) {
+          return cached;
+        }
+        const gcj02Location = await requestNavigationLocation("gcj02");
+        if (hasValidCoords$1(gcj02Location)) {
+          return gcj02Location;
+        }
+        throw new Error("骑手定位未就绪");
+      },
+      normalizeMessageList(event) {
+        const rawData = event && event.detail ? event.detail.data : null;
+        if (Array.isArray(rawData))
+          return rawData;
+        if (rawData && typeof rawData === "object")
+          return [rawData];
+        return [];
+      },
+      extractOverviewMessage(event) {
+        const messageList = this.normalizeMessageList(event);
+        for (const item of messageList) {
+          const candidate = item && item.data && typeof item.data === "object" ? item.data : item;
+          const normalized = candidate && candidate.data && typeof candidate.data === "object" ? candidate.data : candidate;
+          if (normalized && normalized.action && normalized.payload) {
+            return normalized;
+          }
+        }
+        return null;
+      },
+      buildFallbackSelectedOrder(payload = {}) {
+        const fallbackOrderId = safeText$5(payload.orderId);
+        if (!fallbackOrderId) {
+          return null;
+        }
+        return {
+          id: fallbackOrderId,
+          orderNo: safeText$5(payload.orderNo),
+          label: safeText$5(payload.label),
+          status: Number(payload.status || 0),
+          statusText: safeText$5(payload.statusText),
+          merchantName: safeText$5(payload.merchantName),
+          privacyContactName: safeText$5(payload.privacyContactName),
+          privacyContactPhone: safeText$5(payload.privacyContactPhone),
+          goodsSummaryList: Array.isArray(payload.goodsSummaryList) ? payload.goodsSummaryList.map((item) => safeText$5(item)).filter(Boolean) : [],
+          merchantLng: safeText$5(payload.merchantLng),
+          merchantLat: safeText$5(payload.merchantLat),
+          merchantCoordType: safeText$5(payload.merchantCoordType || "wgs84") || "wgs84",
+          customerLng: safeText$5(payload.customerLng),
+          customerLat: safeText$5(payload.customerLat),
+          customerCoordType: safeText$5(payload.customerCoordType || "wgs84") || "wgs84",
+          isCurrent: false
+        };
+      },
+      processOverviewMessage(message) {
+        const { action, payload } = message;
+        const selected = this.buildSelectedOrderFromPayload(payload) || findOverviewOrder(this.overviewOrders, payload.orderId) || this.buildFallbackSelectedOrder(payload);
+        if (!selected) {
+          return;
+        }
+        this.applySelectedOrder(selected);
+        this.hasManualSelection = true;
+        this.updateStatusText();
+        if (action === "confirmSelectedDelivery" && this.stage === "delivery") {
+          this.submitConfirmDeliveryForOrder(selected);
+          return;
+        }
+        if (action === "startSelectedNavigation" && this.stage === "delivery") {
+          this.startNavigation();
+          return;
+        }
+        if (this.stage !== "delivery") {
+          this.buildOverviewUrl();
+        }
+      },
+      handleOverviewMessage(event) {
+        const message = this.extractOverviewMessage(event);
+        if (!message || !message.payload) {
+          return;
+        }
+        this.processOverviewMessage(message);
+      },
       async startNavigation() {
+        var _a, _b;
         if (this.launching) {
           return;
         }
-        this.launching = true;
-        this.failed = false;
-        this.statusText = "正在进入配送界面...";
-        const riderPosition = await this.resolveRiderPosition();
-        const result = await startTencentNavigation({
-          stage: this.stage,
-          riderLng: riderPosition.lng,
-          riderLat: riderPosition.lat,
-          merchantLng: this.merchantLng,
-          merchantLat: this.merchantLat,
-          customerLng: this.customerLng,
-          customerLat: this.customerLat
-        });
-        this.launching = false;
-        this.launchFinished = true;
-        if (result && result.success) {
-          this.statusText = this.stage === "delivery" ? "送货配送界面已打开" : "取餐配送界面已打开";
-          setTimeout(() => {
-            uni.navigateBack({
-              delta: 1
-            });
-          }, 80);
+        if (!this.selectedOrder) {
+          uni.showToast({
+            title: "请先点一个用户坐标",
+            icon: "none"
+          });
           return;
         }
-        this.failed = true;
-        this.statusText = result && result.message ? result.message : "进入配送界面失败，请重试";
-        uni.showToast({
-          title: this.statusText,
-          icon: "none"
-        });
-      },
-      async resolveRiderPosition() {
-        const existingLng = Number(this.riderLng);
-        const existingLat = Number(this.riderLat);
-        if (hasValidCoords({ lng: existingLng, lat: existingLat })) {
-          return {
-            lng: existingLng,
-            lat: existingLat
+        this.launching = true;
+        try {
+          const riderPosition = await this.resolveRiderPosition();
+          const rawMerchantLng = this.stage === "delivery" ? "" : this.selectedOrder.merchantLng || this.merchantLng;
+          const rawMerchantLat = this.stage === "delivery" ? "" : this.selectedOrder.merchantLat || this.merchantLat;
+          const rawCustomerLng = this.selectedOrder.customerLng || this.customerLng;
+          const rawCustomerLat = this.selectedOrder.customerLat || this.customerLat;
+          const merchantCoords = this.stage === "delivery" ? { lng: "", lat: "" } : normalizeTencentTargetCoords(
+            rawMerchantLng,
+            rawMerchantLat,
+            ((_a = this.selectedOrder) == null ? void 0 : _a.merchantCoordType) || "wgs84"
+          );
+          const customerCoords = normalizeTencentTargetCoords(
+            rawCustomerLng,
+            rawCustomerLat,
+            ((_b = this.selectedOrder) == null ? void 0 : _b.customerCoordType) || "wgs84"
+          );
+          const navigationParams = {
+            stage: this.stage,
+            orderId: this.selectedOrder.id || this.orderId,
+            token: getToken(),
+            baseUrl: BASE_URL,
+            riderLng: riderPosition.lng,
+            riderLat: riderPosition.lat,
+            merchantLng: merchantCoords.lng,
+            merchantLat: merchantCoords.lat,
+            customerLng: customerCoords.lng,
+            customerLat: customerCoords.lat
           };
-        }
-        const cachedSample = this.getCachedRiderPosition();
-        if (cachedSample) {
-          this.riderLng = cachedSample.lng;
-          this.riderLat = cachedSample.lat;
-          this.statusText = "已读取骑手最近一次真实定位，正在进入配送界面...";
-          return cachedSample;
-        }
-        try {
-          const gcj02Location = await this.requestNavigationLocation("gcj02");
-          if (this.hasValidCoords(gcj02Location)) {
-            this.riderLng = gcj02Location.lng;
-            this.riderLat = gcj02Location.lat;
-            return gcj02Location;
+          const result = await startTencentNavigation(navigationParams);
+          if (result && result.success) {
+            if (this.stage === "delivery") {
+              this.notifyOrderRefresh(this.selectedOrder && this.selectedOrder.id ? this.selectedOrder.id : this.orderId);
+              this.goBack();
+            }
+            return;
           }
-        } catch (error) {
-          formatAppLog("warn", "at pages/map/nav.vue:124", "[nav] gcj02 rider location failed", error);
-        }
-        try {
-          const wgs84Location = await this.requestNavigationLocation("wgs84");
-          if (this.hasValidCoords(wgs84Location)) {
-            this.riderLng = wgs84Location.lng;
-            this.riderLat = wgs84Location.lat;
-            return wgs84Location;
-          }
-        } catch (error) {
-          formatAppLog("warn", "at pages/map/nav.vue:134", "[nav] wgs84 high-accuracy rider location failed", error);
-        }
-        try {
-          const lowAccuracyLocation = await this.requestNavigationLocation("wgs84", {
-            isHighAccuracy: false,
-            highAccuracyExpireTime: 15e3
+          formatAppLog("error", "at pages/map/nav.vue:876", "腾讯原生导航返回失败结果", result);
+          uni.showToast({
+            title: (result == null ? void 0 : result.message) || "打开腾讯导航失败",
+            icon: "none"
           });
-          if (this.hasValidCoords(lowAccuracyLocation)) {
-            this.riderLng = lowAccuracyLocation.lng;
-            this.riderLat = lowAccuracyLocation.lat;
-            return lowAccuracyLocation;
-          }
         } catch (error) {
-          formatAppLog("warn", "at pages/map/nav.vue:147", "[nav] wgs84 low-accuracy rider location failed", error);
+          uni.showToast({
+            title: (error == null ? void 0 : error.message) || "打开腾讯导航失败",
+            icon: "none"
+          });
+        } finally {
+          this.launching = false;
         }
-        return {
-          lng: 0,
-          lat: 0
-        };
       },
-      getCachedRiderPosition() {
-        const cached = getCachedRiderCoords();
-        return hasValidCoords(cached) ? cached : null;
+      goBack() {
+        if (this.backingToOrders) {
+          return;
+        }
+        this.backingToOrders = true;
+        const fallbackOrderId = safeText$4(this.entryOrderId || this.orderId);
+        uni.navigateBack({
+          delta: 1,
+          fail: () => {
+            if (fallbackOrderId) {
+              uni.redirectTo({
+                url: `/pages/orders/detail?id=${encodeURIComponent(fallbackOrderId)}`,
+                complete: () => {
+                  this.backingToOrders = false;
+                }
+              });
+              return;
+            }
+            uni.redirectTo({
+              url: "/pages/orders/index",
+              complete: () => {
+                this.backingToOrders = false;
+              }
+            });
+          },
+          success: () => {
+            this.backingToOrders = false;
+          }
+        });
       }
     }
   };
   function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
     return vue.openBlock(), vue.createElementBlock("view", { class: "page" }, [
-      vue.createElementVNode("view", { class: "status-card" }, [
+      $data.overviewUrl ? (vue.openBlock(), vue.createElementBlock("web-view", {
+        key: 0,
+        class: "overview-webview",
+        src: $data.overviewUrl,
+        onMessage: _cache[0] || (_cache[0] = (...args) => $options.handleOverviewMessage && $options.handleOverviewMessage(...args))
+      }, null, 40, ["src"])) : (vue.openBlock(), vue.createElementBlock("view", {
+        key: 1,
+        class: "error-wrap"
+      }, [
+        vue.createElementVNode("text", { class: "error-title" }, "腾讯地图总览页未准备好"),
+        vue.createElementVNode("text", { class: "error-desc" }, "请先检查 `key(地图密钥)` 配置和本地 `html(静态页面)` 路径。")
+      ])),
+      vue.createElementVNode("view", { class: "overlay-card" }, [
         vue.createElementVNode(
           "text",
           { class: "title" },
@@ -10592,33 +12175,61 @@ ${coordText}` : searchText;
           1
           /* TEXT */
         ),
+        vue.createElementVNode("view", { class: "chip-row" }, [
+          vue.createElementVNode(
+            "text",
+            { class: "chip chip-primary" },
+            "当前选中 " + vue.toDisplayString($options.currentOrderLabel),
+            1
+            /* TEXT */
+          ),
+          vue.createElementVNode(
+            "text",
+            { class: "chip" },
+            "阶段 " + vue.toDisplayString($options.stageLabel),
+            1
+            /* TEXT */
+          ),
+          vue.createElementVNode(
+            "text",
+            { class: "chip" },
+            "活跃订单 " + vue.toDisplayString($options.activeOrderCount) + " 个",
+            1
+            /* TEXT */
+          )
+        ]),
         vue.createElementVNode(
           "text",
-          { class: "meta" },
-          "阶段：" + vue.toDisplayString($options.stageLabel),
-          1
-          /* TEXT */
-        ),
-        vue.createElementVNode(
-          "text",
-          { class: "meta" },
-          "商家：" + vue.toDisplayString($data.merchantLng || "未传") + ", " + vue.toDisplayString($data.merchantLat || "未传"),
-          1
-          /* TEXT */
-        ),
-        vue.createElementVNode(
-          "text",
-          { class: "meta" },
-          "用户：" + vue.toDisplayString($data.customerLng || "未传") + ", " + vue.toDisplayString($data.customerLat || "未传"),
+          { class: "hint" },
+          vue.toDisplayString($options.hintText),
           1
           /* TEXT */
         )
       ]),
-      $data.failed ? (vue.openBlock(), vue.createElementBlock("button", {
-        key: 0,
-        class: "btn primary",
-        onClick: _cache[0] || (_cache[0] = (...args) => $options.startNavigation && $options.startNavigation(...args))
-      }, "重新进入配送界面")) : vue.createCommentVNode("v-if", true)
+      vue.createElementVNode("view", { class: "bottom-bar" }, [
+        vue.createElementVNode("view", { class: "bottom-tools-row" }, [
+          vue.createElementVNode("button", {
+            class: "btn btn-ghost btn-tool",
+            onClick: _cache[1] || (_cache[1] = (...args) => $options.goBack && $options.goBack(...args))
+          }, "返回订单"),
+          vue.createElementVNode("button", {
+            class: "btn btn-ghost btn-tool",
+            disabled: $data.refreshing,
+            onClick: _cache[2] || (_cache[2] = (...args) => $options.refreshOverview && $options.refreshOverview(...args))
+          }, " 刷新总览 ", 8, ["disabled"])
+        ]),
+        $options.showStartNavigationButton ? (vue.openBlock(), vue.createElementBlock("button", {
+          key: 0,
+          class: "btn btn-primary btn-full",
+          disabled: $data.launching,
+          onClick: _cache[3] || (_cache[3] = (...args) => $options.startNavigation && $options.startNavigation(...args))
+        }, vue.toDisplayString($data.launching ? "正在打开导航..." : $options.startButtonText), 9, ["disabled"])) : (vue.openBlock(), vue.createElementBlock("view", {
+          key: 1,
+          class: "selection-placeholder"
+        }, [
+          vue.createElementVNode("text", { class: "selection-placeholder-text" }, "点红色或紫色用户点位后，底部白卡片里会出现操作按钮")
+        ]))
+      ])
     ]);
   }
   const PagesMapNav = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-0827d2c9"], ["__file", "E:/固始县外卖骑手端/pages/map/nav.vue"]]);
@@ -13695,10 +15306,15 @@ ${coordText}` : searchText;
   let navigationLocationReportingActive = false;
   let gcj02Unsupported = false;
   let locationHintToastUntil = 0;
+  let locationTimeoutLogUntil = 0;
+  let lastHighAccuracyLocationTs = 0;
   let sessionValidationPromise = null;
   let validatedSessionToken = "";
   let validatedSessionUserId = "";
   let validatedSessionUser = null;
+  const LOCATION_REPORT_INTERVAL_MS = 2e4;
+  const LOCATION_HIGH_ACCURACY_REFRESH_MS = 6e4;
+  const LOCATION_TIMEOUT_LOG_INTERVAL_MS = 6e4;
   function reportSessionDebug(hypothesisId, location2, msg, data = {}) {
     {
       return;
@@ -13741,6 +15357,19 @@ ${coordText}` : searchText;
       });
     });
   }
+  function shouldRefreshHighAccuracyLocation() {
+    if (!hasFreshLocationSample(lastLocationSample, 3e4)) {
+      return true;
+    }
+    return Date.now() - lastHighAccuracyLocationTs >= LOCATION_HIGH_ACCURACY_REFRESH_MS;
+  }
+  function shouldLogLocationTimeout() {
+    if (Date.now() < locationTimeoutLogUntil) {
+      return false;
+    }
+    locationTimeoutLogUntil = Date.now() + LOCATION_TIMEOUT_LOG_INTERVAL_MS;
+    return true;
+  }
   function isGcj02NotSupportedError(error) {
     const errMsg = String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || "");
     return errMsg.includes("not support gcj02");
@@ -13777,6 +15406,16 @@ ${coordText}` : searchText;
     const lngDiff = Math.abs(Number(current.longitude || 0) - Number(previous.longitude || 0));
     return latDiff + lngDiff <= 1e-5;
   }
+  function hasFreshLocationSample(sample = {}, maxAgeMs = 12e4) {
+    const sampleTs = Number((sample == null ? void 0 : sample.ts) || 0);
+    if (!sampleTs) {
+      return false;
+    }
+    if (!Number.isFinite(Number(sample == null ? void 0 : sample.latitude)) || !Number.isFinite(Number(sample == null ? void 0 : sample.longitude))) {
+      return false;
+    }
+    return Date.now() - sampleTs <= maxAgeMs;
+  }
   function buildLocationFailureMeta(error) {
     const errMsg = String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || "");
     const lower = errMsg.toLowerCase();
@@ -13810,7 +15449,7 @@ ${coordText}` : searchText;
   const _sfc_main = {
     globalData: {},
     onLaunch() {
-      formatAppLog("log", "at App.vue:188", "App Launch - 骑手端启动");
+      formatAppLog("log", "at App.vue:225", "App Launch - 骑手端启动");
       reportSessionDebug("B", "App.vue:157", "app launch lifecycle entered", {
         hasToken: !!getToken(),
         hasUserInfo: !!getUserInfo$1(),
@@ -13822,7 +15461,7 @@ ${coordText}` : searchText;
       this.handleAppVisible("launch");
     },
     onShow() {
-      formatAppLog("log", "at App.vue:200", "App Show - 骑手端显示");
+      formatAppLog("log", "at App.vue:237", "App Show - 骑手端显示");
       reportSessionDebug("B", "App.vue:164", "app show lifecycle entered", {
         hasToken: !!getToken(),
         hasUserInfo: !!getUserInfo$1(),
@@ -13833,7 +15472,7 @@ ${coordText}` : searchText;
       this.handleAppVisible("show");
     },
     onHide() {
-      formatAppLog("log", "at App.vue:211", "App Hide - 骑手端隐藏");
+      formatAppLog("log", "at App.vue:248", "App Hide - 骑手端隐藏");
       reportSessionDebug("B", "App.vue:170", "app hide lifecycle entered", {
         hasToken: !!getToken(),
         hasUserInfo: !!getUserInfo$1(),
@@ -13895,7 +15534,7 @@ ${coordText}` : searchText;
       },
       resetValidatedSession(reason = "") {
         if (reason) {
-          formatAppLog("log", "at App.vue:273", "重置骑手端会话校验状态:", reason);
+          formatAppLog("log", "at App.vue:310", "重置骑手端会话校验状态:", reason);
         }
         sessionValidationPromise = null;
         validatedSessionToken = "";
@@ -13952,7 +15591,7 @@ ${coordText}` : searchText;
           return false;
         }
         if (this.isBootingOrLoginPage()) {
-          formatAppLog("log", "at App.vue:332", `当前处于启动/登录页，不启动后台任务: ${source}`);
+          formatAppLog("log", "at App.vue:369", `当前处于启动/登录页，不启动后台任务: ${source}`);
           this.stopAllBackgroundJobs();
           return false;
         }
@@ -14015,7 +15654,7 @@ ${coordText}` : searchText;
             validatedSessionToken = snapshot.token;
             validatedSessionUserId = getUserId(remoteUser);
             validatedSessionUser = remoteUser;
-            formatAppLog("log", "at App.vue:402", "骑手端会话校验通过，允许启动后台任务");
+            formatAppLog("log", "at App.vue:439", "骑手端会话校验通过，允许启动后台任务");
             return true;
           } catch (error) {
             const code = Number((error == null ? void 0 : error.code) || 0);
@@ -14028,7 +15667,7 @@ ${coordText}` : searchText;
               this.clearInvalidLocalSession(`服务端会话校验失败，状态码: ${code}`, { redirect: !this.isBootingOrLoginPage() });
               return false;
             }
-            formatAppLog("error", "at App.vue:415", "骑手端会话校验失败，暂不启动后台任务", error);
+            formatAppLog("error", "at App.vue:452", "骑手端会话校验失败，暂不启动后台任务", error);
             this.resetValidatedSession("会话校验未通过");
             return false;
           } finally {
@@ -14045,7 +15684,7 @@ ${coordText}` : searchText;
           hasToken: !!getToken(),
           hasUserInfo: !!getUserInfo$1()
         });
-        formatAppLog("warn", "at App.vue:433", reason);
+        formatAppLog("warn", "at App.vue:470", reason);
         clearRiderSession();
         this.resetValidatedSession(reason);
         this.stopAllBackgroundJobs();
@@ -14077,7 +15716,7 @@ ${coordText}` : searchText;
           reportLocationDebug("A", "App.vue:startLocationReport:not-ready", "位置上报未启动，会话未就绪", {
             route: ((_a = getCurrentPages().slice(-1)[0]) == null ? void 0 : _a.route) || ""
           });
-          formatAppLog("log", "at App.vue:465", "会话未就绪，不启动位置上报");
+          formatAppLog("log", "at App.vue:502", "会话未就绪，不启动位置上报");
           return;
         }
         const storedUser = getUserInfo$1() || {};
@@ -14096,7 +15735,7 @@ ${coordText}` : searchText;
             rider_kind: storedUser.rider_kind || "",
             user_id: getUserId(storedUser)
           });
-          formatAppLog("log", "at App.vue:485", "当前账号不属于调度定位上报角色，不启动位置上报");
+          formatAppLog("log", "at App.vue:522", "当前账号不属于调度定位上报角色，不启动位置上报");
           return;
         }
         if (this.shouldPauseLocationReportForNavigation(storedUser)) {
@@ -14106,17 +15745,17 @@ ${coordText}` : searchText;
             rider_kind: storedUser.rider_kind || "",
             user_id: getUserId(storedUser)
           });
-          formatAppLog("log", "at App.vue:495", "当前处于导航态，后台位置上报让位暂停");
+          formatAppLog("log", "at App.vue:532", "当前处于导航态，后台位置上报让位暂停");
           return;
         }
         reportLocationDebug("A", "App.vue:startLocationReport:started", "位置上报定时器已启动", {
-          interval_ms: 1e4,
+          interval_ms: LOCATION_REPORT_INTERVAL_MS,
           role: storedUser.role || "",
           delivery_scope: storedUser.delivery_scope || "",
           rider_kind: storedUser.rider_kind || "",
           user_id: getUserId(storedUser)
         });
-        formatAppLog("log", "at App.vue:506", "启动位置上报定时器，间隔 10 秒");
+        formatAppLog("log", "at App.vue:543", "启动位置上报定时器，间隔 " + LOCATION_REPORT_INTERVAL_MS / 1e3 + " 秒");
         locationTimer = setInterval(() => {
           const latestUser2 = getUserInfo$1() || {};
           if (!this.canStartBackgroundJobs() || !canReportDispatchLocation(latestUser2) || this.shouldPauseLocationReportForNavigation(latestUser2)) {
@@ -14124,7 +15763,7 @@ ${coordText}` : searchText;
             return;
           }
           this.doReportLocation();
-        }, 1e4);
+        }, LOCATION_REPORT_INTERVAL_MS);
         const latestUser = getUserInfo$1() || {};
         if (this.canStartBackgroundJobs() && canReportDispatchLocation(latestUser) && !this.shouldPauseLocationReportForNavigation(latestUser)) {
           this.doReportLocation();
@@ -14134,9 +15773,74 @@ ${coordText}` : searchText;
         if (locationTimer) {
           clearInterval(locationTimer);
           locationTimer = null;
-          formatAppLog("log", "at App.vue:540", "位置上报定时器已停止");
+          formatAppLog("log", "at App.vue:577", "位置上报定时器已停止");
         }
         locationReportInFlight = false;
+      },
+      async reportLocationSample(sample = null) {
+        var _a, _b, _c, _d, _e;
+        if (!sample || !Number.isFinite(sample.latitude) || !Number.isFinite(sample.longitude)) {
+          return null;
+        }
+        const payload = {
+          latitude: sample.latitude,
+          longitude: sample.longitude
+        };
+        const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample);
+        formatAppLog("log", "at App.vue:590", "位置上报请求体:", {
+          ...payload,
+          timestamp: sample.ts,
+          locationSource: sample.locationSource,
+          nearlySameAsLast
+        });
+        lastLocationSample = { ...sample };
+        if (this.globalData) {
+          this.globalData.latestRiderLocation = { ...sample };
+        }
+        const reportRes = await post("/rider/location/report", payload, {
+          background: true,
+          silent: true,
+          suppressAuthToast: true,
+          suppressErrorToast: true
+        }).catch((err) => {
+          reportLocationDebug("D", "App.vue:reportLocationSample:report-fail", "位置上报接口失败", {
+            errMsg: String((err == null ? void 0 : err.message) || (err == null ? void 0 : err.errMsg) || ""),
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            locationSource: sample.locationSource || ""
+          });
+          formatAppLog("log", "at App.vue:612", "真实位置上报接口失败:", err);
+          return null;
+        });
+        if ((_a = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _a.throttled) {
+          reportLocationDebug("D", "App.vue:reportLocationSample:report-throttled", "位置已获取但后端限频忽略写入", {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            rider_location_updated_at: ((_b = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _b.rider_location_updated_at) || "",
+            locationSource: sample.locationSource || ""
+          });
+          formatAppLog("warn", "at App.vue:623", "位置已获取，但后端本次限频忽略写入:", {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            rider_location_updated_at: ((_c = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _c.rider_location_updated_at) || "",
+            reason: "位置上报过于频繁，已忽略本次写入",
+            locationSource: sample.locationSource || ""
+          });
+        } else if (reportRes) {
+          reportLocationDebug("D", "App.vue:reportLocationSample:report-ok", "位置已成功提交到后端", {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            rider_location_updated_at: ((_d = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _d.rider_location_updated_at) || "",
+            locationSource: sample.locationSource || ""
+          });
+          formatAppLog("log", "at App.vue:637", "位置上报成功，已提交到后端:", {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            rider_location_updated_at: ((_e = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _e.rider_location_updated_at) || "",
+            locationSource: sample.locationSource || ""
+          });
+        }
+        return reportRes;
       },
       doReportLocation() {
         const storedUser = getUserInfo$1() || {};
@@ -14150,7 +15854,6 @@ ${coordText}` : searchText;
         locationReportInFlight = true;
         const requestTs = Date.now();
         (async () => {
-          var _a, _b, _c, _d, _e;
           try {
             reportLocationDebug("A", "App.vue:doReportLocation:begin", "开始一次位置上报尝试", {
               role: storedUser.role || "",
@@ -14161,38 +15864,62 @@ ${coordText}` : searchText;
             });
             let res = null;
             let sample = null;
-            if (!gcj02Unsupported) {
+            if (!sample) {
               try {
-                reportLocationDebug("B", "App.vue:doReportLocation:gcj02", "尝试 gcj02 定位", {
+                reportLocationDebug("B", "App.vue:doReportLocation:wgs84-low-first", "先用 wgs84 普通精度快速定位", {
+                  high_accuracy: false,
+                  high_accuracy_expire_time: 15e3
+                });
+                res = await requestUniLocation("wgs84", {
+                  isHighAccuracy: false,
+                  highAccuracyExpireTime: 15e3
+                });
+                sample = normalizeReportLocation(res, requestTs, "wgs84", "wgs84_low_accuracy_first");
+              } catch (error) {
+                reportLocationDebug("B", "App.vue:doReportLocation:wgs84-low-first-fail", "wgs84 普通精度定位失败", {
+                  errMsg: String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || "")
+                });
+                if (buildLocationFailureMeta(error).type !== "timeout" || shouldLogLocationTimeout()) {
+                  formatAppLog("warn", "at App.vue:692", "wgs84 普通精度定位失败，准备尝试高精度定位:", error);
+                }
+              }
+            }
+            if (!sample && shouldRefreshHighAccuracyLocation() && !gcj02Unsupported) {
+              try {
+                reportLocationDebug("B", "App.vue:doReportLocation:gcj02", "尝试 gcj02 高精度定位", {
                   high_accuracy: true
                 });
                 res = await requestUniLocation("gcj02");
-                sample = normalizeReportLocation(res, requestTs, "gcj02", "gcj02");
+                sample = normalizeReportLocation(res, requestTs, "gcj02", "gcj02_high_accuracy");
+                lastHighAccuracyLocationTs = Date.now();
               } catch (error) {
-                reportLocationDebug("B", "App.vue:doReportLocation:gcj02-fail", "gcj02 定位失败", {
+                reportLocationDebug("B", "App.vue:doReportLocation:gcj02-fail", "gcj02 高精度定位失败", {
                   errMsg: String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || ""),
                   unsupported: isGcj02NotSupportedError(error)
                 });
                 if (isGcj02NotSupportedError(error)) {
                   gcj02Unsupported = true;
-                  formatAppLog("warn", "at App.vue:585", "当前环境不支持 gcj02，改用 wgs84 定位并本地转换为 gcj02 上报");
-                } else {
-                  formatAppLog("warn", "at App.vue:587", "gcj02 定位失败，改用 wgs84 定位兜底:", error);
+                  formatAppLog("warn", "at App.vue:711", "当前环境不支持 gcj02，后续改用 wgs84 定位并本地转换为 gcj02 上报");
+                } else if (buildLocationFailureMeta(error).type !== "timeout" || shouldLogLocationTimeout()) {
+                  formatAppLog("warn", "at App.vue:713", "gcj02 高精度定位失败，准备改用 wgs84 高精度兜底:", error);
                 }
               }
             }
-            if (!sample) {
+            if (!sample && shouldRefreshHighAccuracyLocation()) {
               try {
-                reportLocationDebug("B", "App.vue:doReportLocation:wgs84-high", "尝试 wgs84 高精度定位", {
+                reportLocationDebug("B", "App.vue:doReportLocation:wgs84-high", "尝试 wgs84 高精度定位补偿", {
                   high_accuracy: true
                 });
                 res = await requestUniLocation("wgs84");
                 sample = normalizeReportLocation(res, requestTs, "wgs84", "wgs84_to_gcj02");
+                lastHighAccuracyLocationTs = Date.now();
               } catch (error) {
                 reportLocationDebug("B", "App.vue:doReportLocation:wgs84-high-fail", "wgs84 高精度定位失败", {
                   errMsg: String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || "")
                 });
-                formatAppLog("warn", "at App.vue:602", "wgs84 高精度定位失败，改用普通定位兜底:", error);
+                if (buildLocationFailureMeta(error).type !== "timeout" || shouldLogLocationTimeout()) {
+                  formatAppLog("warn", "at App.vue:730", "wgs84 高精度定位失败，继续走最近定位兜底:", error);
+                }
               }
             }
             if (!sample) {
@@ -14215,7 +15942,7 @@ ${coordText}` : searchText;
               provider: (sample == null ? void 0 : sample.provider) || ""
             });
             const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample);
-            formatAppLog("log", "at App.vue:625", "位置上报原始定位结果:", {
+            formatAppLog("log", "at App.vue:754", "位置上报原始定位结果:", {
               latitude: sample.latitude,
               longitude: sample.longitude,
               accuracy: sample.accuracy,
@@ -14227,61 +15954,10 @@ ${coordText}` : searchText;
               nearlySameAsLast
             });
             if (!Number.isFinite(sample.latitude) || !Number.isFinite(sample.longitude)) {
-              formatAppLog("warn", "at App.vue:638", "本次定位结果无效，不上报旧点");
+              formatAppLog("warn", "at App.vue:767", "本次定位结果无效，不上报旧点");
               return;
             }
-            const payload = {
-              latitude: sample.latitude,
-              longitude: sample.longitude
-            };
-            formatAppLog("log", "at App.vue:646", "位置上报请求体:", {
-              ...payload,
-              timestamp: sample.ts,
-              locationSource: sample.locationSource,
-              nearlySameAsLast
-            });
-            lastLocationSample = sample;
-            if (this.globalData) {
-              this.globalData.latestRiderLocation = { ...sample };
-            }
-            const reportRes = await post("/rider/location/report", payload, {
-              background: true,
-              silent: true,
-              suppressAuthToast: true,
-              suppressErrorToast: true
-            }).catch((err) => {
-              reportLocationDebug("D", "App.vue:doReportLocation:report-fail", "位置上报接口失败", {
-                errMsg: String((err == null ? void 0 : err.message) || (err == null ? void 0 : err.errMsg) || ""),
-                latitude: payload.latitude,
-                longitude: payload.longitude
-              });
-              formatAppLog("log", "at App.vue:668", "真实位置上报接口失败:", err);
-              return null;
-            });
-            if ((_a = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _a.throttled) {
-              reportLocationDebug("D", "App.vue:doReportLocation:report-throttled", "位置已获取但后端限频忽略写入", {
-                latitude: payload.latitude,
-                longitude: payload.longitude,
-                rider_location_updated_at: ((_b = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _b.rider_location_updated_at) || ""
-              });
-              formatAppLog("warn", "at App.vue:678", "位置已获取，但后端本次限频忽略写入:", {
-                latitude: payload.latitude,
-                longitude: payload.longitude,
-                rider_location_updated_at: ((_c = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _c.rider_location_updated_at) || "",
-                reason: "位置上报过于频繁，已忽略本次写入"
-              });
-            } else if (reportRes) {
-              reportLocationDebug("D", "App.vue:doReportLocation:report-ok", "位置已成功提交到后端", {
-                latitude: payload.latitude,
-                longitude: payload.longitude,
-                rider_location_updated_at: ((_d = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _d.rider_location_updated_at) || ""
-              });
-              formatAppLog("log", "at App.vue:690", "位置上报成功，已提交到后端:", {
-                latitude: payload.latitude,
-                longitude: payload.longitude,
-                rider_location_updated_at: ((_e = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _e.rider_location_updated_at) || ""
-              });
-            }
+            await this.reportLocationSample(sample);
           } catch (err) {
             const failureMeta = buildLocationFailureMeta(err);
             reportLocationDebug("E", "App.vue:doReportLocation:catch", "位置上报总流程失败", {
@@ -14290,8 +15966,22 @@ ${coordText}` : searchText;
               failure_text: failureMeta.text,
               failure_detail: failureMeta.detail
             });
-            formatAppLog("warn", "at App.vue:704", `[定位上报失败] ${failureMeta.text}: ${failureMeta.detail}`, err);
-            if (Date.now() >= locationHintToastUntil && failureMeta.type !== "permission") {
+            if (failureMeta.type === "timeout" && hasFreshLocationSample(lastLocationSample, 12e4)) {
+              const fallbackSample = {
+                ...lastLocationSample,
+                ts: Date.now(),
+                locationSource: `${lastLocationSample.locationSource || "cached"}_timeout_fallback`
+              };
+              formatAppLog("warn", "at App.vue:788", "本次实时定位超时，已改为复用最近一次有效定位静默上报:", {
+                latitude: fallbackSample.latitude,
+                longitude: fallbackSample.longitude,
+                locationSource: fallbackSample.locationSource
+              });
+              await this.reportLocationSample(fallbackSample);
+              return;
+            }
+            formatAppLog("warn", "at App.vue:796", `[定位上报失败] ${failureMeta.text}: ${failureMeta.detail}`, err);
+            if (Date.now() >= locationHintToastUntil && (failureMeta.type === "permission" || failureMeta.type === "service_disabled")) {
               locationHintToastUntil = Date.now() + 12e3;
               uni.showToast({
                 title: failureMeta.text,
@@ -14367,9 +16057,9 @@ ${coordText}` : searchText;
             suppressAuthToast: true,
             suppressErrorToast: true
           });
-          formatAppLog("log", "at App.vue:788", "县城司机在线状态已同步到后端:", nextStatus);
+          formatAppLog("log", "at App.vue:886", "县城司机在线状态已同步到后端:", nextStatus);
         } catch (error) {
-          formatAppLog("error", "at App.vue:790", "县城司机在线状态同步失败:", error);
+          formatAppLog("error", "at App.vue:888", "县城司机在线状态同步失败:", error);
         }
       }
     }

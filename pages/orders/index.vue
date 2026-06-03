@@ -57,7 +57,7 @@
                   <view v-if="isTownOrder(order)" class="scope-tag">乡镇订单</view>
                   <view v-if="isTransferOrder(order)" class="transfer-tag">{{ getTransferTag(order) }}</view>
                   <view class="status-tag" :style="{ backgroundColor: getStatusColor(order.status, order) }">
-                    {{ getStatusText(order.status) }}
+                    {{ getStatusText(order) }}
                   </view>
                 </view>
               </view>
@@ -111,20 +111,8 @@
             >
               开始配送
             </button>
-            <button
-              v-if="canConfirmMerchantSelfDelivery(order)"
-              class="btn btn-success"
-              @click.stop="handleMerchantSelfDeliveryConfirm(order)"
-            >
-              确认送达
-            </button>
-            <button 
-              v-if="!isMerchantDeliveryMode() && canRiderCallConfirmDeliveryApi(order.status) && canOperateOrder(order)" 
-              class="btn btn-success"
-              @click.stop="handleStandardDelivery(order)"
-            >
-              确认送达
-            </button>
+            <!-- 订单列表页现在只负责“看有哪些单、先点进详情或地图再操作”。 -->
+            <!-- 确认送达已经统一收口到详情页和地图总览页，这里不再放列表级送达按钮，避免同一张卡片出现重复送达入口。 -->
             <button 
               class="btn btn-default"
               @click.stop="goDetail(order)"
@@ -195,7 +183,10 @@ export default {
       acceptingOrderId: '',
       reminderEventHandler: null,
       orderRefreshHandler: null,
-      orderRefreshTimer: null
+      orderRefreshTimer: null,
+      orderListRequestPromise: null,
+      orderListRequestKey: '',
+      lastOrderListLoadedAt: 0
     }
   },
   onLoad(options) {
@@ -222,11 +213,27 @@ export default {
       clearTimeout(this.orderRefreshTimer)
       this.orderRefreshTimer = null
     }
+    this.orderListRequestPromise = null
+  },
+  async onPullDownRefresh() {
+    // 这里是“页面原生下拉刷新”的收口点。
+    // pages.json(页面配置) 已经开了 enablePullDownRefresh(允许下拉刷新)，
+    // 如果这里只触发加载、不主动 stopPullDownRefresh()，顶部转圈就会一直挂着不结束。
+    try {
+      this.page = 1
+      await this.loadOrderList({ force: true })
+    } finally {
+      uni.stopPullDownRefresh()
+    }
   },
   methods: {
     applyReminderRouteOptions(options = {}) {
       this.reminderScene = String(options.scene || '').trim()
       this.reminderOrderId = String(options.orderId || '').trim()
+      // 地图总览页现在会按“总作业页”口径退出到订单列表，
+      // 并把目标标签页通过路由参数带回来。
+      // 这里先记下来，等状态标签初始化完以后，再校验这个值是否真的是当前账号可用的“配送中”标签。
+      this.currentStatus = String(options.status || this.currentStatus || '').trim()
     },
     bindReminderEvents() {
       if (!this.reminderEventHandler) {
@@ -238,7 +245,7 @@ export default {
         }
       }
       if (!this.orderRefreshHandler) {
-        this.orderRefreshHandler = () => {
+        this.orderRefreshHandler = (payload = {}) => {
           if (this.orderRefreshTimer) {
             clearTimeout(this.orderRefreshTimer)
           }
@@ -297,10 +304,16 @@ export default {
         ]
       }
       if (this.isTownStationmasterUser()) {
-        // 乡镇站长只保留业务上真正需要的 3 个分组
+        // 乡镇站长这里现在拆成 4 个分组：
+        // 1. 原生乡镇待接单
+        // 2. 原生乡镇配送中
+        // 3. 县城转入乡镇的独立转入池
+        // 4. 已完成
+        // 这样县城转入单就不会再混进乡镇原生池里串台。
         return [
           { key: 'town_pending', label: '未接单', count: 0 },
           { key: 'town_delivering', label: '配送中', count: 0 },
+          { key: 'transfer', label: '转入单', count: 0 },
           { key: '6', label: '已完成', count: 0 }
         ]
       }
@@ -337,14 +350,26 @@ export default {
     resetStatusTabs() {
       this.statusTabs = this.buildStatusTabs()
       const validKeys = this.statusTabs.map(tab => tab.key)
+      // 如果是别的页面显式带着 status 进来，并且这个状态在当前账号口径下是合法的，
+      // 就优先落到指定标签。这样地图总览页返回时，能稳定回到“配送中”而不是默认第一页。
+      if (this.currentStatus && validKeys.includes(this.currentStatus)) {
+        return
+      }
       if (!validKeys.includes(this.currentStatus)) {
         this.currentStatus = this.getDefaultCurrentStatus()
       }
     },
 
-    getStatusText(status) {
+    getStatusText(orderOrStatus) {
+      const status = typeof orderOrStatus === 'object' && orderOrStatus !== null
+        ? orderOrStatus.status
+        : orderOrStatus
+      const order = typeof orderOrStatus === 'object' && orderOrStatus !== null
+        ? orderOrStatus
+        : {}
       return getOrderStatusText(status, {
-        profile: this.getDeliveryProfile()
+        profile: this.getDeliveryProfile(),
+        order
       })
     },
     safeText(value) {
@@ -404,6 +429,7 @@ export default {
       return this.safeText(transferFromUser) || '县城司机'
     },
     getTransferCardSummary(order = {}) {
+      const transferStageText = this.safeText(order.transfer_stage_text)
       if (this.safeText(order.transfer_status) === 'assigned_to_town_rider') {
         const targetUser = order.transfer_to_user
         const targetName = targetUser && typeof targetUser === 'object'
@@ -411,12 +437,32 @@ export default {
           : ''
         return targetName ? `已转给：${targetName}` : '已转给骑手'
       }
-      const pieces = [`来源：${this.getTransferFromUserName(order)}`]
+      const pieces = [transferStageText || `来源：${this.getTransferFromUserName(order)}`]
+      if (!transferStageText) {
+        pieces[0] = `来源：${this.getTransferFromUserName(order)}`
+      } else {
+        pieces.push(`来源：${this.getTransferFromUserName(order)}`)
+      }
       const targetTown = this.getTransferToTownName(order)
       if (targetTown) {
         pieces.push(`目标乡镇：${targetTown}`)
       }
       return pieces.join(' · ')
+    },
+    isCountyTransferPoolOrder(order = {}) {
+      const poolKey = this.safeText(order.transfer_pool_key)
+      if (poolKey.startsWith('county_to_town_')) {
+        return true
+      }
+      return this.isTransferOrder(order)
+        && this.safeText(order.origin_delivery_domain) === 'county_dispatch'
+        && this.safeText(order.current_delivery_domain) === 'county_to_town_transfer'
+    },
+    isStationmasterTransferTabOrder(order = {}) {
+      if (!this.isCountyTransferPoolOrder(order)) {
+        return false
+      }
+      return Number(order.status) !== 6
     },
     
     getStatusColor(status, order = {}) {
@@ -474,7 +520,12 @@ export default {
         return false
       }
       const status = Number(order.status)
-      if (![3, 4].includes(status)) {
+      // 乡镇未接单栏现在统一承接“商家已接单后的待接手订单”：
+      // - 2: 备货中
+      // - 3: 出餐完成
+      // - 4: 兼容历史残留状态
+      // 只要还没被具体骑手接走，就继续留在未接单，不要提前跑到配送中。
+      if (![2, 3, 4].includes(status)) {
         return false
       }
       return !this.getOrderResponsibleId(order)
@@ -510,11 +561,19 @@ export default {
       return Number(status) === 4
     },
     isTownPendingTabOrder(order = {}) {
+      if (this.isCountyTransferPoolOrder(order)) {
+        return false
+      }
       return this.isTownPoolOrder(order)
     },
     isTownDeliveringTabOrder(order = {}) {
+      if (this.isCountyTransferPoolOrder(order)) {
+        return false
+      }
       const status = Number(order.status)
-      if (![2, 3, 4, 5].includes(status)) {
+      // 乡镇配送中现在只认真正已经开始派送的单。
+      // 前面的备货中/出餐完成都应该留在未接单栏，只有骑手点击接单后进入 status=5 才进配送中。
+      if (status !== 5) {
         return false
       }
       if (this.isActualTownStationmaster()) {
@@ -537,6 +596,8 @@ export default {
           return list.filter(order => this.isTownPendingTabOrder(order))
         case 'town_delivering':
           return list.filter(order => this.isTownDeliveringTabOrder(order))
+        case 'transfer':
+          return list.filter(order => this.isStationmasterTransferTabOrder(order))
         case '6':
           return list.filter(order => Number(order.status) === 6)
         default:
@@ -599,56 +660,94 @@ export default {
       this.currentStatus = status
       this.clearReminderScene()
       this.page = 1
-      this.loadOrderList()
+      this.loadOrderList({ force: true })
     },
     clearReminderScene() {
       this.reminderScene = ''
       this.reminderOrderId = ''
     },
     
-    async loadOrderList() {
+    buildOrderListRequestKey(params = {}) {
+      // 这个 key 专门用来识别“当前页面想拿的是不是同一份列表数据”。
+      // 这样 onLoad/onShow 连着触发，或者全局刷新事件和页面初始化撞在一起时，
+      // 就不会把同一批订单重复请求两三遍。
+      return JSON.stringify({
+        status: this.currentStatus,
+        reminderScene: this.reminderScene,
+        reminderOrderId: this.reminderOrderId,
+        params
+      })
+    },
+
+    async loadOrderList({ force = false } = {}) {
       if (!this.hasPageAccess) {
         return
       }
-      try {
-        const params = {}
-        if (!this.isTownStationmasterUser() && !this.useSimplifiedTabs() && this.currentStatus !== '' && this.currentStatus !== 'transfer') {
-          params.status = this.currentStatus
-        }
-        
-        const res = await getRiderOrders(params)
-        let list = Array.isArray(res?.data) ? res.data : []
-        if (!this.isMerchantDeliveryMode()) {
-          list = list.filter(order => order.order_type !== 'supermarket')
-        }
-        if (this.reminderOrderId) {
-          list = list.slice().sort((left, right) => {
-            const leftScore = String(left.id) === this.reminderOrderId ? 1 : 0
-            const rightScore = String(right.id) === this.reminderOrderId ? 1 : 0
-            return rightScore - leftScore
-          })
-        }
-
-        this.updateStatusCounts(list)
-        if (this.isMerchantDeliveryMode()) {
-          this.orderList = this.filterMerchantDeliveryOrders(list)
-          return
-        }
-        if (this.isTownStationmasterUser()) {
-          this.orderList = this.filterTownStationmasterOrders(list)
-          return
-        }
-        if (this.useSimplifiedTabs()) {
-          this.orderList = this.filterCountyOrders(list)
-          return
-        }
-        this.orderList = this.currentStatus === 'transfer'
-          ? list.filter(order => this.isTransferOrder(order))
-          : list
-      } catch (e) {
-        console.error('加载订单失败', e)
-        this.orderList = []
+      const params = {}
+      if (!this.isTownStationmasterUser() && !this.useSimplifiedTabs() && this.currentStatus !== '' && this.currentStatus !== 'transfer') {
+        params.status = this.currentStatus
       }
+
+      const requestKey = this.buildOrderListRequestKey(params)
+      const now = Date.now()
+
+      // 这里先挡掉“同一个页面刚进来就连续请求同一份列表”的情况。
+      // uni-app 页面常见现象是 onLoad 和 onShow 紧挨着触发，如果都直连接口，
+      // 高峰期一个骑手点进配送页就可能白白打两次同一个热接口。
+      if (!force && this.orderListRequestPromise && this.orderListRequestKey === requestKey) {
+        return this.orderListRequestPromise
+      }
+
+      // 这里再补一层短时间缓存，专门收掉刚加载成功后 1 秒内的重复刷新。
+      // 这样既能减掉初始化抖动，又不会影响骑手手动刷新和切 tab 后要马上看最新数据。
+      if (!force && this.orderListRequestKey === requestKey && now - this.lastOrderListLoadedAt < 1000) {
+        return this.orderList
+      }
+
+      const requestPromise = (async () => {
+        try {
+          const res = await getRiderOrders(params)
+          let list = Array.isArray(res?.data) ? res.data : []
+          if (!this.isMerchantDeliveryMode()) {
+            list = list.filter(order => order.order_type !== 'supermarket')
+          }
+          if (this.reminderOrderId) {
+            list = list.slice().sort((left, right) => {
+              const leftScore = String(left.id) === this.reminderOrderId ? 1 : 0
+              const rightScore = String(right.id) === this.reminderOrderId ? 1 : 0
+              return rightScore - leftScore
+            })
+          }
+
+          this.updateStatusCounts(list)
+          if (this.isMerchantDeliveryMode()) {
+            this.orderList = this.filterMerchantDeliveryOrders(list)
+          } else if (this.isTownStationmasterUser()) {
+            this.orderList = this.filterTownStationmasterOrders(list)
+          } else if (this.useSimplifiedTabs()) {
+            this.orderList = this.filterCountyOrders(list)
+          } else {
+            this.orderList = this.currentStatus === 'transfer'
+              ? list.filter(order => this.isTransferOrder(order))
+              : list
+          }
+
+          this.lastOrderListLoadedAt = Date.now()
+          return this.orderList
+        } catch (e) {
+          console.error('加载订单失败', e)
+          this.orderList = []
+          throw e
+        } finally {
+          if (this.orderListRequestPromise === requestPromise) {
+            this.orderListRequestPromise = null
+          }
+        }
+      })()
+
+      this.orderListRequestKey = requestKey
+      this.orderListRequestPromise = requestPromise
+      return requestPromise
     },
     
     updateStatusCounts(sourceList = []) {
@@ -667,12 +766,15 @@ export default {
       if (this.isTownStationmasterUser()) {
         const pendingCount = sourceList.filter(order => this.isTownPendingTabOrder(order)).length
         const deliveringCount = sourceList.filter(order => this.isTownDeliveringTabOrder(order)).length
+        const transferCount = sourceList.filter(order => this.isStationmasterTransferTabOrder(order)).length
         const completedCount = sourceList.filter(order => Number(order.status) === 6).length
         this.statusTabs = this.buildStatusTabs().map(tab => ({
           ...tab,
           count: tab.key === 'town_pending'
             ? pendingCount
-            : (tab.key === 'town_delivering' ? deliveringCount : completedCount)
+            : (tab.key === 'town_delivering'
+              ? deliveringCount
+              : (tab.key === 'transfer' ? transferCount : completedCount))
         }))
         return
       }
@@ -722,6 +824,9 @@ export default {
         if (this.currentStatus === 'town_delivering') {
           return '当前暂无配送中的乡镇订单'
         }
+        if (this.currentStatus === 'transfer') {
+          return '当前暂无县城转入的乡镇订单'
+        }
         return '当前暂无已完成的乡镇订单'
       }
       if (this.useSimplifiedTabs()) {
@@ -739,10 +844,18 @@ export default {
     },
     
     async onRefresh() {
+      // 这里收的是 scroll-view(滚动容器) 自己那套下拉刷新状态。
+      // 它和页面原生下拉刷新不是同一个开关，所以要分别关闭，避免一边停了另一边还在转。
+      // 下拉刷新是骑手主动要求“立刻拿最新数据”，这里不能继续复用旧请求。
+      // 否则如果页面刚好还有一个列表请求在路上，手动下拉只会傻等那个旧请求结束，
+      // 用户体感上就会像“明明已经下拉了，却还要卡十几二十秒才刷新出来”。
       this.refreshing = true
-      this.page = 1
-      await this.loadOrderList()
-      this.refreshing = false
+      try {
+        this.page = 1
+        await this.loadOrderList({ force: true })
+      } finally {
+        this.refreshing = false
+      }
     },
     
     loadMore() {

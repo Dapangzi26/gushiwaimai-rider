@@ -1,7 +1,7 @@
 import { getRiderOrders } from '@/api/order.js'
 import { getTownErrandConversations } from '@/api/town-errand-message.js'
 import { isMerchantDeliveryUser, isRiderAppUser, isTownStationmaster } from '@/utils/rider-auth.js'
-import { initSocket, disconnectSocket, onReminderEvents } from '@/utils/socket.js'
+import { initSocket, disconnectSocket, onReminderEvents, onSocketEvent } from '@/utils/socket.js'
 import { playReminderAlert } from '@/utils/town-errand-voice.js'
 import {
   getReminderSettings,
@@ -14,6 +14,7 @@ const ORDER_POLL_INTERVAL_BACKGROUND = 30000
 const TOWN_POLL_INTERVAL_FOREGROUND = 15000
 const TOWN_POLL_INTERVAL_BACKGROUND = 30000
 const DEDUPE_WINDOW_MS = 180000
+const INITIAL_ORDER_REMINDER_WINDOW_MS = 90000
 const REMINDER_EVENT_NAME = 'rider-reminder:event'
 const ORDER_REFRESH_EVENT_NAME = 'rider-reminder:order-refresh'
 const TOWN_UNREAD_EVENT_NAME = 'rider-reminder:town-unread'
@@ -21,6 +22,7 @@ const SETTINGS_CHANGED_EVENT_NAME = 'rider-reminder:settings-changed'
 const TIMEOUT_WARNING_LEVELS = [600, 180]
 const HIGH_PRIORITY_VALUES = ['high', 'urgent', 'critical', 'p0', 'p1']
 const TAB_PAGE_PREFIXES = ['/pages/index/index', '/pages/profile/index']
+const RIDER_NEW_ORDER_PLAYABLE_STATUSES = [2, 3, 4]
 
 function isAppPlatform() {
   try {
@@ -212,6 +214,8 @@ function normalizeReminderType(type = '') {
   }
 
   const map = {
+    new_delivery: 'new_order',
+    order_assigned: 'new_order',
     rider_new_delivery: 'new_order',
     rider_station_order_assigned: 'new_order',
     rider_transfer_assigned: 'transfer',
@@ -365,6 +369,93 @@ function buildOrderSnapshot(order = {}) {
     updatedAt: safeText(order.updated_at || order.transfer_updated_at || order.status_updated_at || order.modified_at || ''),
     merchantReady: isActionableMerchantReady(order)
   }
+}
+
+function shouldReplayInitialPoolReminder(order = {}, snapshot = {}) {
+  // 这里补的是“App 刚重启，第一次轮询把新单当快照吃掉”的漏提醒窗口。
+  // 只对刚进入待接单池、而且还很新的订单补一次提醒，避免把很早以前的旧单也重新播一遍。
+  if (Number(order.rider_id || 0) > 0) {
+    return false
+  }
+  if (!RIDER_NEW_ORDER_PLAYABLE_STATUSES.includes(Number(snapshot.status || 0))) {
+    return false
+  }
+
+  const freshnessTs = parseTimeValue(
+    order.accepted_at
+    || order.status_updated_at
+    || order.transfer_updated_at
+    || order.created_at
+  )
+  if (!freshnessTs) {
+    return false
+  }
+
+  const ageMs = Date.now() - freshnessTs
+  return ageMs >= 0 && ageMs <= INITIAL_ORDER_REMINDER_WINDOW_MS
+}
+
+function shouldPlayNewPoolReminder(order = {}, snapshot = {}) {
+  if (isTransferOrder(order)) {
+    return true
+  }
+  if (Number(order.rider_id || 0) > 0) {
+    return false
+  }
+  // 新配送语音只能在商家接单后响；用户刚付款的 status=1 只能提醒商家，不能提前吵到骑手。
+  // 这里会影响 socket 和轮询两条入口，后面的 handleReminder 还会再做一次总闸门兜底。
+  return RIDER_NEW_ORDER_PLAYABLE_STATUSES.includes(Number(snapshot.status || 0))
+}
+
+function pickReminderOrder(reminder = {}) {
+  const meta = reminder?.meta || {}
+  const payload = meta?.payload || {}
+  const extra = meta?.extra || {}
+  const candidates = [
+    reminder.order,
+    meta.order,
+    pickOrder(payload),
+    pickOrder(extra)
+  ]
+  return candidates.find((item = {}) => {
+    if (!item || typeof item !== 'object') {
+      return false
+    }
+    return item.id || item.order_no || item.status || item.order_status || item.orderStatus
+  }) || {}
+}
+
+function pickReminderOrderStatus(reminder = {}) {
+  const order = pickReminderOrder(reminder)
+  const meta = reminder?.meta || {}
+  const payload = meta?.payload || {}
+  const extra = meta?.extra || {}
+  const rawStatus = order.status
+    ?? payload.status
+    ?? payload.order_status
+    ?? payload.orderStatus
+    ?? extra.status
+    ?? extra.order_status
+    ?? extra.orderStatus
+  const status = Number(rawStatus)
+  return Number.isFinite(status) ? status : 0
+}
+
+function shouldBlockNewOrderVoice(reminder = {}) {
+  const type = normalizeReminderType(reminder.type)
+  if (type !== 'new_order') {
+    return false
+  }
+
+  const order = pickReminderOrder(reminder)
+  if (isTransferOrder(order) || normalizeReminderType(reminder.rawEventType) === 'transfer') {
+    return false
+  }
+
+  const status = pickReminderOrderStatus(reminder)
+  // 这里是骑手端最后一道语音闸门：凡是新配送提醒，必须带着已过商家接单的订单状态。
+  // 如果某个 push/reminder_event 没带状态，也先不播，避免旧包或异常推送绕过前面的入口判断。
+  return !RIDER_NEW_ORDER_PLAYABLE_STATUSES.includes(status)
 }
 
 function buildOrdersIndexTarget(scene, orderId = '') {
@@ -594,6 +685,8 @@ function bindPushClickListeners() {
         return
       }
       if (payload?.target && payload?.reminderType) {
+        const extraPayload = parseJsonMaybe(payload?.extra, {})
+        const order = pickOrder(payload)
         handleReminder({
           type: safeText(payload.reminderType),
           title: safeText(message?.title || payload?.title || '骑手通知'),
@@ -602,7 +695,13 @@ function bindPushClickListeners() {
           target: payload.target,
           dedupeKey: safeText(payload?.dedupeKey || ''),
           soundType: safeText(payload?.soundType || 'default'),
-          priority: safeText(payload?.priority || 'normal')
+          priority: safeText(payload?.priority || 'normal'),
+          meta: {
+            payload,
+            order,
+            extra: extraPayload,
+            eventName: 'push_receive'
+          }
         }, { source: 'push:receive' })
       }
     })
@@ -676,6 +775,9 @@ function buildReminderFromSocket(eventName, payload = {}) {
 
   if (eventName === 'new_delivery' || eventName === 'order_assigned') {
     const transfer = isTransferOrder(order)
+    if (!shouldPlayNewPoolReminder(order, buildOrderSnapshot(order))) {
+      return null
+    }
     const type = normalizedType || (transfer ? 'transfer' : 'new_order')
     const fallbackTitle = transfer ? '收到转派订单' : '收到新派单'
     const fallbackText = transfer
@@ -792,6 +894,16 @@ function handleReminder(reminder = {}, { source = 'unknown' } = {}) {
   // 页面数据刷新不能依赖提醒是否成功播报，否则去重或关闭提醒时首页会滞后。
   emitRefreshEvents(reminder)
 
+  if (shouldBlockNewOrderVoice(reminder)) {
+    logWarn('新配送提醒未达到骑手播报状态，已跳过语音', {
+      source,
+      orderId: reminder.orderId || '',
+      status: pickReminderOrderStatus(reminder),
+      rawEventType: reminder.rawEventType || ''
+    })
+    return false
+  }
+
   const settings = getReminderSettingsSnapshot()
   if (!isReminderEnabledForType(type, settings)) {
     logInfo(`提醒类型已关闭，跳过播报: ${type}`, { source })
@@ -833,10 +945,33 @@ function evaluateOrderChanges(list = []) {
   })
 
   const isInitialLoad = !state.orderSnapshot.size
-  if (!isInitialLoad) {
+  if (isInitialLoad) {
+    latestMap.forEach(({ raw, snapshot }, id) => {
+      if (!shouldReplayInitialPoolReminder(raw, snapshot)) {
+        return
+      }
+      handleReminder({
+        type: isTransferOrder(raw) ? 'transfer' : 'new_order',
+        orderId: id,
+        title: isTransferOrder(raw) ? '收到转派订单' : '收到新派单',
+        text: isTransferOrder(raw)
+          ? `订单${safeText(raw.order_no || id)}已转到你这里，请及时处理`
+          : `${getMerchantName(raw)}有新的配送任务，请及时接单`,
+        body: isTransferOrder(raw)
+          ? `订单${safeText(raw.order_no || id)}已转到你这里，请及时处理`
+          : `${getMerchantName(raw)}有新的配送任务，请及时接单`,
+        dedupeKey: `${isTransferOrder(raw) ? 'transfer' : 'new_order'}:${id}:initial:${snapshot.status}`,
+        target: isTransferOrder(raw) ? buildOrderDetailTarget(id) : buildOrdersIndexTarget('new_delivery', id),
+        meta: { order: raw, source: 'order_poll_initial_recent' }
+      }, { source: 'order-poll:initial-recent' })
+    })
+  } else {
     latestMap.forEach(({ raw, snapshot }, id) => {
       const previous = state.orderSnapshot.get(id)?.snapshot
       if (!previous) {
+        if (!shouldPlayNewPoolReminder(raw, snapshot)) {
+          return
+        }
         handleReminder({
           type: isTransferOrder(raw) ? 'transfer' : 'new_order',
           orderId: id,
@@ -923,7 +1058,16 @@ async function pollOrders() {
   }
   state.orderPollInFlight = true
   try {
-    const res = await getRiderOrders()
+    const res = await getRiderOrders({}, {
+      // 这里是提醒中心自己的后台轮询，不是骑手手动点击触发的页面请求。
+      // 一旦接口偶发超时，如果还沿用默认请求提示，就会每隔几秒反复弹“网络错误，请检查网络”，
+      // 骑手会误以为整个系统都坏了。
+      // 所以这里统一按“静默后台刷新”处理：失败记日志，但不要直接打断界面。
+      background: true,
+      silent: true,
+      suppressAuthToast: true,
+      suppressErrorToast: true
+    })
     const user = state.userInfo || getStoredUserInfo() || {}
     let list = toArray(res?.data ?? res)
     if (!isMerchantDeliveryUser(user)) {
@@ -1026,24 +1170,34 @@ function bindSocketReminderEvents() {
     state.socketCleanup = null
   }
 
-  if (isAppPlatform()) {
-    disconnectSocket()
-    logInfo('App 端关闭 Socket 提醒，统一使用轮询兜底')
-    return
-  }
-
   if (!state.token) {
     return
   }
 
+  // 这里把 Socket 作为主通道保留下来，App 端也一样。
+  // 原来 App 一进来就被主动断开，只能依赖轮询兜底，
+  // 所以“商家刚点接单就立刻播报”这件事天然做不到。
   initSocket(state.token)
-  state.socketCleanup = onReminderEvents((payload, eventName) => {
+  const reminderCleanup = onReminderEvents((payload, eventName) => {
     const reminder = buildReminderFromSocket(eventName, payload)
     if (!reminder) {
       return
     }
     handleReminder(reminder, { source: `socket:${eventName}` })
   })
+  const connectCleanup = onSocketEvent('connect', () => {
+    logInfo('Socket 已连上，立即补拉一次订单，避免重连窗口漏提醒')
+    pollOrders()
+    pollTownMessages()
+  })
+  const connectErrorCleanup = onSocketEvent('connect_error', (payload = {}) => {
+    logWarn('Socket 连接失败，当前继续保留轮询兜底', payload)
+  })
+  state.socketCleanup = () => {
+    reminderCleanup()
+    connectCleanup()
+    connectErrorCleanup()
+  }
 }
 
 function resetRuntimeState() {

@@ -3,7 +3,8 @@ import { normalizeTestParams } from '@/sdk/tencent-nav/core/nav-contract.js'
 function getTencentNativeModule() {
   // #ifdef APP-PLUS
   try {
-    return uni.requireNativePlugin('TencentNaviModule')
+    const plugin = uni.requireNativePlugin('TencentNaviModule')
+    return plugin
   } catch (error) {
     return null
   }
@@ -20,6 +21,12 @@ export function startTencentNativeNavigation(params = {}) {
   const module = getTencentNativeModule()
 
   if (!module) {
+    // #region debug-point D:module-unavailable
+    reportTencentBridgeDebug('D', 'sdk/tencent-nav/bridge/native-bridge.js:startTencentNativeNavigation', '腾讯原生插件不可用', {
+      stage: normalized.stage,
+      orderId: normalized.orderId
+    })
+    // #endregion
     return Promise.resolve({
       success: false,
       code: 'MODULE_UNAVAILABLE',

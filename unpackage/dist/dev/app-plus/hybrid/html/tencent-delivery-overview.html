@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>腾讯配送总览</title>
+  <style>
+    html, body, #map-root {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #0f172a;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    #map-root {
+      position: relative;
+    }
+
+    .loading,
+    .error-panel {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+      color: #ffffff;
+      background: #0f172a;
+      z-index: 2;
+    }
+
+    .error-panel {
+      flex-direction: column;
+      gap: 12px;
+      align-items: flex-start;
+      justify-content: flex-start;
+      padding-top: 96px;
+    }
+
+    .error-title {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .error-desc {
+      font-size: 14px;
+      line-height: 1.8;
+      color: rgba(255, 255, 255, 0.78);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div id="map-root">
+    <div id="loading" class="loading">腾讯地图总览加载中...</div>
+  </div>
+
+  <script>
+    ;(function () {
+      function getQueryValue(name) {
+        const search = window.location.search || ''
+        const params = new URLSearchParams(search)
+        return params.get(name) || ''
+      }
+
+      function safeText(value) {
+        return value == null ? '' : String(value).trim()
+      }
+
+      function toNumber(value) {
+        const num = Number(value)
+        return Number.isFinite(num) ? num : null
+      }
+
+      function hasValidCoords(lng, lat) {
+        return Number.isFinite(lng) && Number.isFinite(lat) && !(lng === 0 && lat === 0)
+      }
+
+      function parseCoordType(value, fallback) {
+        const normalized = safeText(value).toLowerCase()
+        if (normalized === 'gcj02' || normalized === 'wgs84') {
+          return normalized
+        }
+        return fallback === 'gcj02' ? 'gcj02' : 'wgs84'
+      }
+
+      function isOutOfChina(lng, lat) {
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return true
+        return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271
+      }
+
+      function transformLat(x, y) {
+        let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x))
+        ret += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0
+        ret += ((20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin((y / 3.0) * Math.PI)) * 2.0) / 3.0
+        ret += ((160.0 * Math.sin((y / 12.0) * Math.PI) + 320.0 * Math.sin((y * Math.PI) / 30.0)) * 2.0) / 3.0
+        return ret
+      }
+
+      function transformLng(x, y) {
+        let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x))
+        ret += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0
+        ret += ((20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin((x / 3.0) * Math.PI)) * 2.0) / 3.0
+        ret += ((150.0 * Math.sin((x / 12.0) * Math.PI) + 300.0 * Math.sin((x / 30.0) * Math.PI)) * 2.0) / 3.0
+        return ret
+      }
+
+      function wgs84ToGcj02(lng, lat) {
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+          return { lng: null, lat: null }
+        }
+        if (isOutOfChina(lng, lat)) {
+          return { lng, lat }
+        }
+        const a = 6378245.0
+        const ee = 0.00669342162296594323
+        let dLat = transformLat(lng - 105.0, lat - 35.0)
+        let dLng = transformLng(lng - 105.0, lat - 35.0)
+        const radLat = (lat / 180.0) * Math.PI
+        let magic = Math.sin(radLat)
+        magic = 1 - ee * magic * magic
+        const sqrtMagic = Math.sqrt(magic)
+        dLat = (dLat * 180.0) / (((a * (1 - ee)) / (magic * sqrtMagic)) * Math.PI)
+        dLng = (dLng * 180.0) / ((a / sqrtMagic) * Math.cos(radLat) * Math.PI)
+        return {
+          lng: lng + dLng,
+          lat: lat + dLat
+        }
+      }
+
+      function toDisplayCoord(lng, lat, coordType) {
+        if (!hasValidCoords(lng, lat)) {
+          return { lng: null, lat: null }
+        }
+        if (parseCoordType(coordType, 'wgs84') === 'gcj02') {
+          return { lng, lat }
+        }
+        return wgs84ToGcj02(lng, lat)
+      }
+
+      function parsePayload() {
+        try {
+          const raw = getQueryValue('payload')
+          return raw ? JSON.parse(decodeURIComponent(raw)) : {}
+        } catch (error) {
+          return {}
+        }
+      }
+
+      function createMarkerSvg(color, text) {
+        const encodedText = safeText(text || '').slice(0, 2)
+        const svg = [
+          '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="56" viewBox="0 0 44 56">',
+          '<path d="M22 54C22 54 40 34.27 40 22C40 10.95 31.05 2 20 2S0 10.95 0 22c0 12.27 18 32 18 32z" transform="translate(2 0)" fill="' + color + '"/>',
+          '<circle cx="22" cy="22" r="10" fill="#ffffff"/>',
+          '<text x="22" y="26" text-anchor="middle" font-size="11" font-weight="700" fill="' + color + '">' + encodedText + '</text>',
+          '</svg>'
+        ].join('')
+        return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
+      }
+
+      function showError(message) {
+        const root = document.getElementById('map-root')
+        if (!root) return
+        root.innerHTML = [
+          '<div class="error-panel">',
+          '<div class="error-title">腾讯地图总览加载失败</div>',
+          '<div class="error-desc">' + safeText(message || '未知错误') + '</div>',
+          '</div>'
+        ].join('')
+      }
+
+      function buildGeometries(payload) {
+        const geometries = []
+        const riderDisplay = toDisplayCoord(
+          toNumber(payload.riderLng),
+          toNumber(payload.riderLat),
+          payload.riderCoordType || 'gcj02'
+        )
+        const merchantDisplay = toDisplayCoord(
+          toNumber(payload.merchantLng),
+          toNumber(payload.merchantLat),
+          payload.merchantCoordType || 'wgs84'
+        )
+        const customerDisplay = toDisplayCoord(
+          toNumber(payload.customerLng),
+          toNumber(payload.customerLat),
+          payload.customerCoordType || 'wgs84'
+        )
+        const stage = safeText(payload.stage) === 'delivery' ? 'delivery' : 'pickup'
+        const orderNo = safeText(payload.orderNo)
+        const currentLabel = orderNo ? ('尾号' + orderNo.slice(-4)) : '当前单'
+
+        if (hasValidCoords(riderDisplay.lng, riderDisplay.lat)) {
+          geometries.push({
+            id: 'rider',
+            styleId: 'rider',
+            position: new TMap.LatLng(riderDisplay.lat, riderDisplay.lng),
+            properties: {
+              title: '骑手当前位置'
+            }
+          })
+        }
+
+        if (hasValidCoords(merchantDisplay.lng, merchantDisplay.lat)) {
+          geometries.push({
+            id: 'merchant',
+            styleId: 'primary',
+            position: new TMap.LatLng(merchantDisplay.lat, merchantDisplay.lng),
+            properties: {
+              title: stage === 'pickup' ? currentLabel + ' · 商家' : currentLabel + ' · 商家点'
+            }
+          })
+        }
+
+        if (hasValidCoords(customerDisplay.lng, customerDisplay.lat)) {
+          geometries.push({
+            id: 'customer',
+            styleId: 'primary',
+            position: new TMap.LatLng(customerDisplay.lat, customerDisplay.lng),
+            properties: {
+              title: stage === 'delivery' ? currentLabel + ' · 用户' : currentLabel + ' · 送达点'
+            }
+          })
+        }
+
+        const otherOrders = Array.isArray(payload.otherOrders) ? payload.otherOrders : []
+        otherOrders.forEach(function (item, index) {
+          const display = toDisplayCoord(
+            toNumber(item && item.customerLng),
+            toNumber(item && item.customerLat),
+            item && item.customerCoordType || payload.customerCoordType || 'wgs84'
+          )
+          if (!hasValidCoords(display.lng, display.lat)) {
+            return
+          }
+          const label = safeText(item && item.label) || ('副单' + (index + 1))
+          geometries.push({
+            id: 'other-' + index,
+            styleId: 'secondary',
+            position: new TMap.LatLng(display.lat, display.lng),
+            properties: {
+              title: label
+            }
+          })
+        })
+
+        return geometries
+      }
+
+      function fitMapBounds(map, geometries) {
+        if (!map || !Array.isArray(geometries) || !geometries.length) {
+          return
+        }
+        if (geometries.length === 1) {
+          map.setCenter(geometries[0].position)
+          map.setZoom(14)
+          return
+        }
+        const bounds = new TMap.LatLngBounds()
+        geometries.forEach(function (item) {
+          bounds.extend(item.position)
+        })
+        map.fitBounds(bounds, { padding: 72 })
+      }
+
+      function bootMap() {
+        const key = safeText(getQueryValue('key'))
+        if (!key) {
+          showError('缺少 key(地图密钥)，当前没法加载腾讯 H5 地图。')
+          return
+        }
+
+        const payload = parsePayload()
+        const geometries = buildGeometries(payload)
+        if (!geometries.length) {
+          showError('当前订单和活跃副单都没有有效坐标，地图没法定位。')
+          return
+        }
+
+        const root = document.getElementById('map-root')
+        root.innerHTML = ''
+
+        const map = new TMap.Map(root, {
+          zoom: 13,
+          pitch: 0,
+          rotation: 0,
+          mapStyleId: 'style1',
+          showControl: false
+        })
+
+        const infoWindow = new TMap.InfoWindow({
+          map: map,
+          position: geometries[0].position,
+          offset: { x: 0, y: -32 }
+        })
+        infoWindow.close()
+
+        const marker = new TMap.MultiMarker({
+          id: 'delivery-overview-marker',
+          map: map,
+          styles: {
+            rider: new TMap.MarkerStyle({
+              width: 30,
+              height: 38,
+              anchor: { x: 15, y: 38 },
+              src: createMarkerSvg('#1677FF', '骑')
+            }),
+            primary: new TMap.MarkerStyle({
+              width: 34,
+              height: 44,
+              anchor: { x: 17, y: 44 },
+              src: createMarkerSvg('#FF6A00', '主')
+            }),
+            secondary: new TMap.MarkerStyle({
+              width: 28,
+              height: 38,
+              anchor: { x: 14, y: 38 },
+              src: createMarkerSvg('#7C3AED', '副')
+            })
+          },
+          geometries: geometries
+        })
+
+        marker.on('click', function (evt) {
+          const title = safeText(evt && evt.geometry && evt.geometry.properties && evt.geometry.properties.title) || '点位'
+          infoWindow.setPosition(evt.geometry.position)
+          infoWindow.setContent('<div style="padding:8px 10px;font-size:13px;line-height:1.6;">' + title + '</div>')
+          infoWindow.open()
+        })
+
+        fitMapBounds(map, geometries)
+      }
+
+      const script = document.createElement('script')
+      script.src = 'https://map.qq.com/api/gljs?v=1.exp&key=' + encodeURIComponent(safeText(getQueryValue('key')))
+      script.onload = bootMap
+      script.onerror = function () {
+        showError('腾讯地图 JS SDK 加载失败，请检查 key(地图密钥) 或当前网络。')
+      }
+      document.head.appendChild(script)
+    })()
+  </script>
+</body>
+</html>

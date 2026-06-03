@@ -86,6 +86,14 @@
         <text class="label">转派状态</text>
         <text class="value">{{ getTransferStatusText(order) || '未提供' }}</text>
       </view>
+      <view v-if="isCountyTransferPoolOrder(order)" class="info-row">
+        <text class="label">履约池</text>
+        <text class="value">{{ getTransferPoolText(order) }}</text>
+      </view>
+      <view v-if="isCountyTransferPoolOrder(order)" class="info-row">
+        <text class="label">当前归属</text>
+        <text class="value">{{ getDeliveryDomainText(order.current_delivery_domain) }}</text>
+      </view>
       <view class="info-row">
         <text class="label">目标乡镇</text>
         <text class="value">{{ getTransferToTownName(order) || '未提供' }}</text>
@@ -135,7 +143,7 @@
         class="btn btn-revoke"
         @click="handleTransferRevoke"
       >
-        撤回一次
+        {{ getTransferRevokeButtonText() }}
       </button>
       <button
         v-if="showPrimaryDeliveryAction"
@@ -218,6 +226,13 @@ import {
   requestNavigationLocation as requestNavigationLocationFromService,
   resolveNavigationStartCoords as resolveNavigationStartCoordsFromService
 } from '@/utils/navigation-service.js'
+import { startTencentNavigation } from '@/sdk/tencent-nav/bridge/index.js'
+import {
+  buildRiderOverviewOrders,
+  getCustomerCoords as getOverviewCustomerCoords,
+  getMerchantCoords as getOverviewMerchantCoords,
+  safeText as getOverviewSafeText
+} from '@/utils/map-overview.js'
 const DELIVERY_DISTANCE_REFRESH_INTERVAL = 10000
 const DEBUG_SERVER_URL = 'http://198.18.0.1:7777/event'
 const DEBUG_SESSION_ID = 'rider-random-logout'
@@ -366,6 +381,15 @@ export default {
     this.stopDeliveryDistancePolling()
   },
   methods: {
+    getOrderAvailableActions(order = this.order) {
+      // 这里优先信任后端下发的 available_actions(可用动作)。
+      // 原因是“列表能做什么、详情能做什么、状态 4/5 分别能导航到哪”这些规则，
+      // 后端已经统一算过一遍了，详情页不要再自己拍脑袋重写一套。
+      const list = Array.isArray(order?.available_actions) ? order.available_actions : []
+      return list
+        .map(item => this.safeText(item))
+        .filter(Boolean)
+    },
     formatTime,
     canRiderCallConfirmDeliveryApi,
     canRiderOfferSpecialComplete,
@@ -564,7 +588,16 @@ export default {
       return this.safeText(order.transfer_tag) || (this.isTransferOrder(order) ? '转派单' : '')
     },
     getTransferStatusText(order = {}) {
-      return this.safeText(order.transfer_status)
+      return this.safeText(order.transfer_stage_text) || this.safeText(order.transfer_status)
+    },
+    isCountyTransferPoolOrder(order = {}) {
+      const poolKey = this.safeText(order.transfer_pool_key)
+      if (poolKey.startsWith('county_to_town_')) {
+        return true
+      }
+      return this.isTransferOrder(order)
+        && this.safeText(order.origin_delivery_domain) === 'county_dispatch'
+        && this.safeText(order.current_delivery_domain) === 'county_to_town_transfer'
     },
     getTransferToTownName(order = {}) {
       const directTargetTownName = this.safeText(order.target_town_name)
@@ -636,6 +669,7 @@ export default {
       return ''
     },
     getTransferBannerText(order = {}) {
+      const stageText = this.safeText(order.transfer_stage_text)
       if (this.isAssignedToTownRider(order)) {
         const riderName = this.getAssignedTownRiderName(order)
         const fromUser = this.getTransferFromUserName(order)
@@ -643,7 +677,11 @@ export default {
           return `已转给：${riderName}${fromUser ? ` · 来源：${fromUser}` : ''}`
         }
       }
-      const pieces = [`来源：${this.getTransferFromUserName(order)}`]
+      const pieces = []
+      if (stageText) {
+        pieces.push(stageText)
+      }
+      pieces.push(`来源：${this.getTransferFromUserName(order)}`)
       const targetTown = this.getTransferToTownName(order)
       if (targetTown) {
         pieces.push(`目标乡镇：${targetTown}`)
@@ -653,6 +691,31 @@ export default {
         pieces.push(`目标站长：${targetUser}`)
       }
       return pieces.join(' · ')
+    },
+    getDeliveryDomainText(domain = '') {
+      const normalized = this.safeText(domain)
+      const map = {
+        county_dispatch: '县城调度域',
+        town_native_delivery: '乡镇原生履约域',
+        county_to_town_transfer: '县城转乡镇履约域',
+        self_delivery: '店铺自配送域'
+      }
+      return map[normalized] || '未标注'
+    },
+    getTransferPoolText(order = {}) {
+      const poolKey = this.safeText(order.transfer_pool_key)
+      const poolMap = {
+        county_to_town_stationmaster_pool: '县城转入乡镇站长池',
+        county_to_town_rider_pool: '县城转入乡镇骑手池',
+        county_returned_pool: '县城回退池'
+      }
+      return poolMap[poolKey] || '县城转乡镇转入池'
+    },
+    getTransferRevokeButtonText() {
+      if (this.isCountyTransferPoolOrder(this.order) && this.isTownStationmasterUser()) {
+        return '拒接并退回县城'
+      }
+      return '撤回一次'
     },
     normalizeIdentityValue(value) {
       if (value === undefined || value === null || value === '') {
@@ -667,15 +730,25 @@ export default {
       return this.canAccessPickupNavigation(status) || this.canAccessDeliveryNavigation(status)
     },
     canAccessPickupNavigation(status) {
+      const actions = this.getOrderAvailableActions()
+      if (actions.length) {
+        // 这里只要后端已经明确给了 available_actions(可用动作)，
+        // 详情页就严格按后端动作来，不再自己用旧状态兜底乱放按钮。
+        return actions.includes('navigate_pickup')
+      }
       if (this.isTownOrder(this.order)) {
-        return Number(status) >= 2 && Number(status) <= 5
+        return Number(status) >= 2 && Number(status) <= 4
       }
       return [4, 5].includes(Number(status))
     },
     canAccessDeliveryNavigation(status) {
-      if (this.isTownOrder(this.order)) {
-        return Number(status) >= 2 && Number(status) <= 5
+      const actions = this.getOrderAvailableActions()
+      if (actions.length) {
+        return actions.includes('navigate_delivery')
       }
+      // 送货总览这里必须和现在的业务规则保持一致：
+      // 只有真正进入配送中(status=5) 的订单，才允许看用户点位、进入送货总览。
+      // 像“待配送/已接单但还没确认取餐”的订单，只能去取餐，不能提前去送货。
       return Number(status) === 5
     },
     getFullAddress(order) {
@@ -906,17 +979,21 @@ export default {
       })
     },
     handleTransferRevoke() {
+      const isStationmasterReject =
+        this.isCountyTransferPoolOrder(this.order) &&
+        this.isTownStationmasterUser() &&
+        this.safeText(this.order.current_responsible_role) === 'town_stationmaster'
       uni.showModal({
-        title: '撤回一次',
-        content: '确认撤回本次转派？',
-        confirmText: '确认撤回',
+        title: isStationmasterReject ? '拒接退回县城' : '撤回一次',
+        content: isStationmasterReject ? '确认拒接这笔县城转入订单，并退回县城继续处理？' : '确认撤回本次转派？',
+        confirmText: isStationmasterReject ? '确认退回' : '确认撤回',
         cancelText: '取消',
         success: async (res) => {
           if (!res.confirm) {
             return
           }
           await revokeOrderTransfer(this.getTransferOrderIdentifier())
-          uni.showToast({ title: '已撤回转派', icon: 'success' })
+          uni.showToast({ title: isStationmasterReject ? '已退回县城' : '已撤回转派', icon: 'success' })
           await this.loadOrderDetail()
           this.refreshOrderListPage()
         }
@@ -1119,6 +1196,15 @@ export default {
         return {}
       }
     },
+    parseAddressForOrder(order = {}) {
+      try {
+        return typeof order.delivery_address === 'string'
+          ? JSON.parse(order.delivery_address)
+          : (order.delivery_address || {})
+      } catch (e) {
+        return {}
+      }
+    },
     getCoordinateByKeys(source, keys) {
       for (let i = 0; i < keys.length; i++) {
         const value = source[keys[i]]
@@ -1128,20 +1214,12 @@ export default {
       }
       return ''
     },
-    getMerchantCoords() {
-      const address = this.parseAddress()
-      const merchant = this.order.merchant || {}
-      const lng = this.getCoordinateByKeys(merchant, ['lng', 'lat_lng', 'longitude', 'lon', 'map_lng', 'merchant_lng', 'merchantLng'])
-        || this.getCoordinateByKeys(this.order || {}, ['merchant_lng', 'merchantLng', 'shop_lng', 'shopLng', 'store_lng', 'storeLng', 'pickup_lng', 'pickupLng', 'from_lng', 'fromLng'])
-        || this.getCoordinateByKeys(address, ['merchant_lng', 'shop_lng', 'store_lng', 'pickup_lng', 'from_lng'])
-      const lat = this.getCoordinateByKeys(merchant, ['lat', 'latitude', 'map_lat', 'merchant_lat', 'merchantLat'])
-        || this.getCoordinateByKeys(this.order || {}, ['merchant_lat', 'merchantLat', 'shop_lat', 'shopLat', 'store_lat', 'storeLat', 'pickup_lat', 'pickupLat', 'from_lat', 'fromLat'])
-        || this.getCoordinateByKeys(address, ['merchant_lat', 'shop_lat', 'store_lat', 'pickup_lat', 'from_lat'])
-      return { lng, lat }
+    getMerchantCoords(order = this.order) {
+      return getOverviewMerchantCoords(order)
     },
-    getPickupMerchantCoords() {
-      const address = this.parseAddress()
-      const orderSnapshot = this.order || {}
+    getPickupMerchantCoords(order = this.order) {
+      const address = this.parseAddressForOrder(order)
+      const orderSnapshot = order || {}
       const merchant = orderSnapshot.merchant || {}
       const lng = this.getCoordinateByKeys(orderSnapshot, ['merchant_lng', 'merchantLng', 'shop_lng', 'shopLng', 'store_lng', 'storeLng', 'pickup_lng', 'pickupLng', 'from_lng', 'fromLng'])
         || this.getCoordinateByKeys(merchant, ['merchant_lng', 'merchantLng', 'lng', 'lat_lng', 'longitude', 'lon', 'map_lng'])
@@ -1187,14 +1265,31 @@ export default {
     async resolveNavigationStartCoords() {
       return resolveNavigationStartCoordsFromService(this.getCachedRiderCoords())
     },
-    getCustomerCoords() {
-      const address = this.parseAddress()
-      const fallback = this.order || {}
-      const lng = this.getCoordinateByKeys(fallback, ['customer_lng', 'delivery_longitude', 'longitude', 'delivery_lng', 'deliveryLng', 'user_lng', 'userLng', 'contact_lng', 'receiver_lng', 'to_lng', 'dest_lng', 'customerLng'])
-        || this.getCoordinateByKeys(address, ['customer_lng', 'delivery_longitude', 'longitude', 'lng', 'delivery_lng', 'deliveryLng', 'user_lng', 'receiver_lng', 'to_lng', 'dest_lng', 'customerLng'])
-      const lat = this.getCoordinateByKeys(fallback, ['customer_lat', 'delivery_latitude', 'latitude', 'delivery_lat', 'deliveryLat', 'user_lat', 'userLat', 'contact_lat', 'receiver_lat', 'to_lat', 'dest_lat', 'customerLat'])
-        || this.getCoordinateByKeys(address, ['customer_lat', 'delivery_latitude', 'latitude', 'lat', 'delivery_lat', 'deliveryLat', 'user_lat', 'receiver_lat', 'to_lat', 'dest_lat', 'customerLat'])
-      return { lng, lat }
+    setNavigationLocationReportingActive(active = false) {
+      // 这里显式告诉 App：当前正在走导航链路。
+      // 目的不是“关闭定位”，而是先暂停后台 10 秒一次的位置上报，
+      // 避免详情页前台导航定位和后台上报定位同时抢 uni.getLocation，最终把系统定位拖到超时。
+      try {
+        const app = typeof getApp === 'function' ? getApp() : null
+        const setter = app?.globalData?.setNavigationLocationReportingActive
+        if (typeof setter === 'function') {
+          setter(!!active)
+        }
+      } catch (error) {}
+    },
+    getCustomerCoords(order = this.order) {
+      return getOverviewCustomerCoords(order)
+    },
+    buildCurrentOverviewOrderSnapshot(stage = 'delivery') {
+      // 地图总览首屏秒开时，外层页面会先拿“当前单兜底对象”直接渲染白卡片。
+      // 所以这里要把商家名、隐私联系人、商品摘要一起塞进入口 payload，
+      // 不然总览页虽然能秒开，但白卡片只能拿到坐标，最终就会显示成“未提供”。
+      const overviewOrders = buildRiderOverviewOrders([this.order], {
+        currentOrderId: this.orderId,
+        user: getStoredUserInfo() || {},
+        stage
+      })
+      return overviewOrders[0] || {}
     },
     async navigateToMap(payload) {
       if (this.navigationLaunching) {
@@ -1207,12 +1302,6 @@ export default {
         uni.showToast({ title: '当前订单状态不可导航', icon: 'none' })
         return
       }
-      const riderId = this.getRiderId()
-      if (!riderId) {
-        uni.showToast({ title: '当前骑手信息缺失，无法导航', icon: 'none' })
-        return
-      }
-      const token = uni.getStorageSync('token') || ''
       const stage = payload && payload.stage === 'delivery' ? 'delivery' : 'pickup'
       const targetCoords = stage === 'delivery'
         ? { lng: payload?.customerLng, lat: payload?.customerLat }
@@ -1237,12 +1326,21 @@ export default {
         return
       }
       this.navigationLaunching = true
+      const cachedRider = this.getCachedRiderCoords()
+      const hasCachedRider = this.hasValidCoords(cachedRider)
+      this.setNavigationLocationReportingActive(true)
       uni.showLoading({
-        title: '正在获取定位',
+        title: hasCachedRider ? '正在进入地图总览' : '正在获取定位',
         mask: true
       })
-      const rider = await this.resolveNavigationStartCoords()
-      if (!this.hasValidCoords(rider)) {
+      // 去送货阶段优先秒开地图总览，不再卡在详情页里硬等新定位。
+      // 只要当前单坐标是齐的，就先进入总览页；骑手当前位置和活跃订单由地图页后台补齐。
+      // 这样真机上点“去送货”时，不会因为定位慢而先白等 2-3 秒。
+      const rider = stage === 'delivery'
+        ? (hasCachedRider ? cachedRider : { lng: '', lat: '' })
+        : (hasCachedRider ? cachedRider : await this.resolveNavigationStartCoords())
+      if (stage === 'pickup' && !this.hasValidCoords(rider)) {
+        this.setNavigationLocationReportingActive(false)
         this.navigationLaunching = false
         uni.hideLoading()
         uni.showToast({
@@ -1257,12 +1355,80 @@ export default {
       const safeMerchantLat = payload && payload.merchantLat !== undefined && payload.merchantLat !== null && payload.merchantLat !== '' ? String(payload.merchantLat) : ''
       const safeCustomerLng = payload && payload.customerLng !== undefined && payload.customerLng !== null && payload.customerLng !== '' ? String(payload.customerLng) : ''
       const safeCustomerLat = payload && payload.customerLat !== undefined && payload.customerLat !== null && payload.customerLat !== '' ? String(payload.customerLat) : ''
+      // 去取餐不要进“多用户送货总览”。
+      // 取餐阶段只需要把当前单导航到商家，避免把还没取到货的订单用户点提前混进来。
+      if (stage === 'pickup') {
+        try {
+          uni.showLoading({
+            title: '正在打开商家导航',
+            mask: true
+          })
+          const result = await startTencentNavigation({
+            stage,
+            riderLng: safeRiderLng,
+            riderLat: safeRiderLat,
+            merchantLng: safeMerchantLng,
+            merchantLat: safeMerchantLat,
+            customerLng: safeCustomerLng,
+            customerLat: safeCustomerLat
+          })
+          if (result && result.success) {
+            uni.showToast({
+              title: '已打开取餐导航',
+              icon: 'success'
+            })
+            return
+          }
+          uni.showToast({
+            title: result?.message || '打开商家导航失败',
+            icon: 'none'
+          })
+          return
+        } catch (error) {
+          this.setNavigationLocationReportingActive(false)
+          uni.showToast({
+            title: error?.message || '打开商家导航失败',
+            icon: 'none'
+          })
+          return
+        } finally {
+          this.setNavigationLocationReportingActive(false)
+          this.navigationLaunching = false
+          uni.hideLoading()
+        }
+      }
+      // 入口页只负责告诉总览页“我是从哪一单点进来的、当前单坐标是什么、现在是去取餐还是去送货”。
+      // 这里的“送货总览”只看已经取完餐、正在配送中的单。
+      // 这样不管从哪一单点进去，看到的都是“当前手里已经能送的这批单”。
+      const currentOverviewOrder = this.buildCurrentOverviewOrderSnapshot(stage)
+      const overviewPayload = {
+        stage,
+        orderId: getOverviewSafeText(this.orderId),
+        orderNo: getOverviewSafeText(this.order?.order_no),
+        merchantName: getOverviewSafeText(currentOverviewOrder.merchantName),
+        privacyContactName: getOverviewSafeText(currentOverviewOrder.privacyContactName),
+        privacyContactPhone: getOverviewSafeText(currentOverviewOrder.privacyContactPhone),
+        goodsSummaryList: Array.isArray(currentOverviewOrder.goodsSummaryList)
+          ? currentOverviewOrder.goodsSummaryList
+          : [],
+        riderLng: safeRiderLng,
+        riderLat: safeRiderLat,
+        merchantLng: safeMerchantLng,
+        merchantLat: safeMerchantLat,
+        customerLng: safeCustomerLng,
+        customerLat: safeCustomerLat
+      }
       uni.showLoading({
-        title: '正在进入导航',
+        title: '正在进入地图总览',
         mask: true
       })
       uni.navigateTo({
-        url: `/pages/map/nav?riderId=${encodeURIComponent(riderId)}&token=${encodeURIComponent(token)}&stage=${encodeURIComponent(stage)}&riderLng=${encodeURIComponent(safeRiderLng)}&riderLat=${encodeURIComponent(safeRiderLat)}&merchantLng=${encodeURIComponent(safeMerchantLng)}&merchantLat=${encodeURIComponent(safeMerchantLat)}&customerLng=${encodeURIComponent(safeCustomerLng)}&customerLat=${encodeURIComponent(safeCustomerLat)}`,
+        url: `/pages/map/nav?payload=${encodeURIComponent(JSON.stringify(overviewPayload))}`,
+        fail: () => {
+          // 地图页如果根本没打开成功，就要立刻把后台定位恢复回去，
+          // 不然 App 会一直以为还停留在导航态，反而影响后续位置上报。
+          this.setNavigationLocationReportingActive(false)
+        },
         complete: () => {
           this.navigationLaunching = false
           uni.hideLoading()
@@ -1281,6 +1447,13 @@ export default {
       })
     },
     goDelivery() {
+      if (!this.canAccessDeliveryNavigation(this.order?.status)) {
+        uni.showToast({
+          title: '订单还没进入配送中，请先取餐',
+          icon: 'none'
+        })
+        return
+      }
       const merchant = this.getMerchantCoords()
       const customer = this.getCustomerCoords()
       this.navigateToMap({
