@@ -150,7 +150,9 @@ export default {
       reminderEventHandler: null,
       orderRefreshHandler: null,
       townUnreadHandler: null,
-      workbenchRefreshTimer: null
+      workbenchRefreshTimer: null,
+      workbenchLoadPromise: null,
+      navigatingUrl: ''
     }
   },
   computed: {
@@ -195,15 +197,13 @@ export default {
     }
     this.bindReminderEvents()
   },
-  async onShow() {
+  onShow() {
     const app = typeof getApp === 'function' ? getApp() : null
     const refreshSession = app?.globalData?.refreshRiderSession
     if (typeof refreshSession === 'function') {
-      try {
-        await refreshSession(false)
-      } catch (error) {
+      refreshSession(false).catch((error) => {
         console.error('工作台刷新骑手会话失败', error)
-      }
+      })
     }
     this.loadData()
   },
@@ -383,14 +383,42 @@ export default {
       }
       return '当前没有分配到你的配送任务'
     },
+    navigateOnce(url = '') {
+      if (!url || this.navigatingUrl === url) {
+        return
+      }
+      this.navigatingUrl = url
+      uni.navigateTo({
+        url,
+        complete: () => {
+          setTimeout(() => {
+            this.navigatingUrl = ''
+          }, 500)
+        }
+      })
+    },
     
     async loadData() {
-      await this.loadUserInfo()
-      await this.loadOrders()
-      await this.loadTodaySummary()
-      await this.loadErrands()
-      this.calculateQueueStats()
-      this.loadWorkbenchSecondaryData()
+      if (this.workbenchLoadPromise) {
+        return this.workbenchLoadPromise
+      }
+
+      this.workbenchLoadPromise = (async () => {
+        await this.loadUserInfo()
+        await Promise.allSettled([
+          this.loadOrders(),
+          this.loadTodaySummary(),
+          this.loadErrands()
+        ])
+        this.calculateQueueStats()
+        await this.loadWorkbenchSecondaryData()
+      })()
+
+      try {
+        return await this.workbenchLoadPromise
+      } finally {
+        this.workbenchLoadPromise = null
+      }
     },
     async loadWorkbenchSecondaryData() {
       const tasks = []
@@ -694,18 +722,18 @@ export default {
       }
     },
     goOrders() {
-      uni.navigateTo({ url: '/pages/orders/index' })
+      this.navigateOnce('/pages/orders/index')
     },
     
     goErrands() {
       if (this.isMerchantDeliveryMode) {
         return
       }
-      uni.navigateTo({ url: '/pages/errands/index' })
+      this.navigateOnce('/pages/errands/index')
     },
     
     goTodayOrders() {
-      uni.navigateTo({ url: '/pages/today-orders/index' })
+      this.navigateOnce('/pages/today-orders/index')
     },
     
     goStationMessages() {
@@ -713,28 +741,26 @@ export default {
         uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
         return
       }
-      uni.navigateTo({ url: '/pages/station-messages/index' })
+      this.navigateOnce('/pages/station-messages/index')
     },
     goMerchantAudit() {
       if (!this.showMerchantAuditEntry) {
         uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
         return
       }
-      uni.navigateTo({ url: '/pages/merchant-audit/index' })
+      this.navigateOnce('/pages/merchant-audit/index')
     },
     goRiderAudit() {
       if (!this.showRiderAuditEntry) {
         uni.showToast({ title: '仅乡镇站长可进入', icon: 'none' })
         return
       }
-      uni.navigateTo({ url: '/pages/rider-audit/index' })
+      this.navigateOnce('/pages/rider-audit/index')
     },
     
     goOrderDetail(order) {
       const target = order.type === 'errand' ? 'errands' : 'orders'
-      uni.navigateTo({ 
-        url: `/pages/${target}/detail?id=${order.id}` 
-      })
+      this.navigateOnce(`/pages/${target}/detail?id=${encodeURIComponent(order.id)}`)
     }
   }
 }

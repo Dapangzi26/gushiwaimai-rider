@@ -237,6 +237,7 @@ const DELIVERY_DISTANCE_REFRESH_INTERVAL = 10000
 const DEBUG_SERVER_URL = 'http://198.18.0.1:7777/event'
 const DEBUG_SESSION_ID = 'rider-random-logout'
 const ENABLE_DEBUG_EVENT_REPORT = false
+const ENABLE_DETAIL_CONSOLE_DEBUG = false
 
 function reportDetailDebug(hypothesisId, location, msg, data = {}) {
   if (!ENABLE_DEBUG_EVENT_REPORT) {
@@ -354,7 +355,10 @@ export default {
       deliveryDistanceLoading: false,
       deliveryDistanceError: '',
       deliveryDistanceTimer: null,
-      navigationLaunching: false
+      navigationLaunching: false,
+      orderDetailRequestPromise: null,
+      orderDetailRequestId: '',
+      lastOrderDetailLoadedAt: 0
     }
   },
   onLoad(options) {
@@ -768,35 +772,51 @@ export default {
         return this.safeText(order.address) || '未知地址'
       }
     },
-    async loadOrderDetail() {
+    async loadOrderDetail({ force = false } = {}) {
       if (!this.hasPageAccess || !this.orderId) {
         return
       }
-      try {
-        const res = await getOrderDetail(this.orderId)
-        this.order = res.data || {}
-        this.syncOrderOwnershipState(this.order, false)
-        await this.refreshConfirmDeliveryDistance({
-          forceLocate: true,
-          silent: true
-        })
-        this.syncDeliveryDistancePolling()
-        console.log('[order-detail] loadOrderDetail success', {
-          orderId: this.order?.id ?? '',
-          orderNo: this.order?.order_no ?? '',
-          status: this.order?.status ?? '',
-          hasOrderOwnership: this.hasOrderOwnership
-        })
-        console.log('[order-detail] debug transfer fields', {
-          order_type: this.order?.order_type,
-          status: this.order?.status,
-          rider_id: this.order?.rider_id,
-          current_responsible_user_id: this.order?.current_responsible_user_id,
-          can_transfer: this.order?.can_transfer
-        })
-      } catch (e) {
-        console.error('加载订单详情失败', e)
+      const requestId = String(this.orderId)
+      if (this.orderDetailRequestPromise && this.orderDetailRequestId === requestId) {
+        return this.orderDetailRequestPromise
       }
+      if (!force && this.orderDetailRequestId === requestId && Date.now() - this.lastOrderDetailLoadedAt < 1200) {
+        return this.order
+      }
+      this.orderDetailRequestId = requestId
+      this.orderDetailRequestPromise = (async () => {
+        try {
+          const res = await getOrderDetail(this.orderId)
+          this.order = res.data || {}
+          this.lastOrderDetailLoadedAt = Date.now()
+          this.syncOrderOwnershipState(this.order, false)
+          await this.refreshConfirmDeliveryDistance({
+            forceLocate: true,
+            silent: true
+          })
+          this.syncDeliveryDistancePolling()
+          if (ENABLE_DETAIL_CONSOLE_DEBUG) {
+            console.log('[order-detail] loadOrderDetail success', {
+              orderId: this.order?.id ?? '',
+              orderNo: this.order?.order_no ?? '',
+              status: this.order?.status ?? '',
+              hasOrderOwnership: this.hasOrderOwnership
+            })
+            console.log('[order-detail] debug transfer fields', {
+              order_type: this.order?.order_type,
+              status: this.order?.status,
+              rider_id: this.order?.rider_id,
+              current_responsible_user_id: this.order?.current_responsible_user_id,
+              can_transfer: this.order?.can_transfer
+            })
+          }
+        } catch (e) {
+          console.error('加载订单详情失败', e)
+        } finally {
+          this.orderDetailRequestPromise = null
+        }
+      })()
+      return this.orderDetailRequestPromise
     },
     async loadTownOptions() {
       try {
@@ -939,7 +959,7 @@ export default {
               target_user_id: payload.target_user_id || ''
             })
             uni.showToast({ title: '转派成功', icon: 'success' })
-            await this.loadOrderDetail()
+            await this.loadOrderDetail({ force: true })
             this.refreshOrderListPage()
           } finally {
             this.transferSubmitting = false
@@ -966,7 +986,7 @@ export default {
               remark: payload.remark || '站长转交本乡镇骑手配送'
             })
             uni.showToast({ title: '转单成功', icon: 'success' })
-            await this.loadOrderDetail()
+            await this.loadOrderDetail({ force: true })
             this.refreshOrderListPage()
           } catch (error) {
             console.error('转给骑手失败', error)
@@ -994,7 +1014,7 @@ export default {
           }
           await revokeOrderTransfer(this.getTransferOrderIdentifier())
           uni.showToast({ title: isStationmasterReject ? '已退回县城' : '已撤回转派', icon: 'success' })
-          await this.loadOrderDetail()
+          await this.loadOrderDetail({ force: true })
           this.refreshOrderListPage()
         }
       })
@@ -1089,7 +1109,7 @@ export default {
           try {
             await confirmDelivery(this.orderId)
             uni.showToast({ title: '送达成功', icon: 'success' })
-            await this.loadOrderDetail()
+            await this.loadOrderDetail({ force: true })
           } catch (e) {
             console.error('确认送达失败', e)
           }
@@ -1116,7 +1136,7 @@ export default {
             try {
               await startMerchantSelfDelivery(this.orderId)
               uni.showToast({ title: '已开始配送', icon: 'success' })
-              await this.loadOrderDetail()
+              await this.loadOrderDetail({ force: true })
             } catch (e) {
               console.error('自配送开始失败', e)
               uni.showToast({ title: this.getErrorMessage(e) || '开始配送失败', icon: 'none' })
@@ -1140,7 +1160,7 @@ export default {
               try {
                 await confirmMerchantSelfDelivery(this.orderId)
                 uni.showToast({ title: '送达成功', icon: 'success' })
-                await this.loadOrderDetail()
+                await this.loadOrderDetail({ force: true })
               } catch (e) {
                 console.error('自配送确认送达失败', e)
                 uni.showToast({ title: this.getErrorMessage(e) || '确认送达失败', icon: 'none' })
@@ -1177,7 +1197,7 @@ export default {
           try {
             await confirmDeliverySpecial(this.orderId)
             uni.showToast({ title: '操作成功', icon: 'success' })
-            await this.loadOrderDetail()
+            await this.loadOrderDetail({ force: true })
           } catch (e) {
             console.error('特殊完结失败', e)
           }
@@ -1514,11 +1534,13 @@ export default {
       if (!this.ensureOrderOwnership('取餐')) {
         return
       }
-      console.log('[order-detail] handlePickup before confirm', {
-        requestOrderId: this.orderId,
-        orderStatus: this.order?.status ?? '',
-        canPickup: this.canPickup(this.order?.status)
-      })
+      if (ENABLE_DETAIL_CONSOLE_DEBUG) {
+        console.log('[order-detail] handlePickup before confirm', {
+          requestOrderId: this.orderId,
+          orderStatus: this.order?.status ?? '',
+          canPickup: this.canPickup(this.order?.status)
+        })
+      }
       if (!this.canPickup(this.order.status)) {
         uni.showToast({ title: '当前订单不可取餐', icon: 'none' })
         return
@@ -1536,7 +1558,7 @@ export default {
           try {
             await riderPickup(this.orderId)
             uni.showToast({ title: '已开始配送', icon: 'success' })
-            await this.loadOrderDetail()
+            await this.loadOrderDetail({ force: true })
           } catch (e) {
             console.error('[order-detail] riderPickup failed', {
               httpStatus: this.getErrorStatusCode(e),

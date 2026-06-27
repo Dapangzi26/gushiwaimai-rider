@@ -1,15 +1,26 @@
 
 .page[data-v-0827d2c9] {
-  min-height: 100vh;
+  /* 骑手地图页这里不能只靠 100vh。
+     在 uni-app 的 app-plus + web-view 场景里，100vh 很容易和状态栏/原生容器高度对不上，
+     真机上就会出现“地图只缩在顶部一小块，下面整屏发白”的问题。
+     这里直接把整页固定铺满窗口，交给 web-view 绝对撑满。 */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   background: #0f172a;
-  position: relative;
+  overflow: hidden;
 }
 .overview-webview[data-v-0827d2c9] {
+  /* 这里不用再写 height: 100vh，直接跟着父容器四边贴满更稳。 */
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 100vh;
+  height: 100%;
 }
 .error-wrap[data-v-0827d2c9] {
-  min-height: 100vh;
+  position: absolute;
+  inset: 0;
   padding: 4.375rem 1.125rem 6.875rem;
   box-sizing: border-box;
   background: #0f172a;

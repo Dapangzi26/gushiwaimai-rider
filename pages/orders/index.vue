@@ -2,7 +2,7 @@
   <view class="container">
     <!-- 状态筛选 -->
     <view class="status-tabs">
-      <view v-if="useSimplifiedTabs()" class="tabs-scroll town-tabs-row">
+      <view v-if="simplifiedTabs" class="tabs-scroll town-tabs-row">
         <view 
           v-for="item in statusTabs" 
           :key="item.key"
@@ -45,7 +45,7 @@
           v-for="order in orderList" 
           :key="order.id"
           class="order-card"
-          :class="{ 'highlight-card': order.status === 1 || order.status === 4, 'town-order-card': isTownOrder(order), 'transfer-order-card': isTransferOrder(order) }"
+          :class="{ 'highlight-card': order.__view.highlightCard, 'town-order-card': order.__view.isTownOrder, 'transfer-order-card': order.__view.isTransferOrder }"
           @click="goDetail(order)"
         >
           <!-- 订单头部 -->
@@ -54,10 +54,10 @@
               <view class="order-info-row">
                 <text class="order-no">{{ order.order_no }}</text>
                 <view class="header-tags">
-                  <view v-if="isTownOrder(order)" class="scope-tag">乡镇订单</view>
-                  <view v-if="isTransferOrder(order)" class="transfer-tag">{{ getTransferTag(order) }}</view>
-                  <view class="status-tag" :style="{ backgroundColor: getStatusColor(order.status, order) }">
-                    {{ getStatusText(order) }}
+                  <view v-if="order.__view.isTownOrder" class="scope-tag">乡镇订单</view>
+                  <view v-if="order.__view.isTransferOrder" class="transfer-tag">{{ order.__view.transferTag }}</view>
+                  <view class="status-tag" :style="{ backgroundColor: order.__view.statusColor }">
+                    {{ order.__view.statusText }}
                   </view>
                 </view>
               </view>
@@ -79,25 +79,25 @@
           </view>
 
           <!-- 配送地址（简化） -->
-          <view v-if="getBriefAddress(order)" class="simple-info">
+          <view v-if="order.__view.briefAddress" class="simple-info">
             <text class="info-icon">📍</text>
-            <text class="info-text address-text order-main-text">{{ getBriefAddress(order) }}</text>
+            <text class="info-text address-text order-main-text">{{ order.__view.briefAddress }}</text>
           </view>
 
-          <view class="simple-info" v-if="getTownName(order)">
+          <view class="simple-info" v-if="order.__view.townName">
             <text class="info-icon">🌲</text>
-            <text class="info-text order-main-text">{{ getTownName(order) }}</text>
+            <text class="info-text order-main-text">{{ order.__view.townName }}</text>
           </view>
 
-          <view v-if="isTransferOrder(order)" class="simple-info transfer-info">
+          <view v-if="order.__view.isTransferOrder" class="simple-info transfer-info">
             <text class="info-icon">🔁</text>
-            <text class="info-text">{{ getTransferCardSummary(order) }}</text>
+            <text class="info-text">{{ order.__view.transferCardSummary }}</text>
           </view>
 
           <!-- 操作按钮 -->
           <view class="order-actions">
             <button
-              v-if="canAcceptTownOrder(order)"
+              v-if="order.__view.canAcceptTownOrder"
               class="btn btn-primary"
               :disabled="acceptingOrderId === String(order.id)"
               @click.stop="handleAcceptOrder(order)"
@@ -105,7 +105,7 @@
               {{ acceptingOrderId === String(order.id) ? '接单中...' : '接单' }}
             </button>
             <button
-              v-if="canStartMerchantSelfDelivery(order)"
+              v-if="order.__view.canStartMerchantSelfDelivery"
               class="btn btn-primary"
               @click.stop="handleMerchantSelfDeliveryStart(order)"
             >
@@ -186,7 +186,18 @@ export default {
       orderRefreshTimer: null,
       orderListRequestPromise: null,
       orderListRequestKey: '',
-      lastOrderListLoadedAt: 0
+      lastOrderListLoadedAt: 0,
+      deliveryProfileSnapshot: null,
+      navigatingOrderId: '',
+      switchingStatus: false
+    }
+  },
+  computed: {
+    deliveryProfile() {
+      return this.deliveryProfileSnapshot || resolveDeliveryProfile(getStoredUserInfo() || {})
+    },
+    simplifiedTabs() {
+      return this.deliveryProfile.useSimplifiedTabs
     }
   },
   onLoad(options) {
@@ -292,8 +303,14 @@ export default {
       return this.getDeliveryProfile().useSimplifiedTabs
     },
     getDeliveryProfile() {
-      const user = getStoredUserInfo() || {}
-      return resolveDeliveryProfile(user)
+      if (!this.deliveryProfileSnapshot) {
+        this.deliveryProfileSnapshot = resolveDeliveryProfile(getStoredUserInfo() || {})
+      }
+      return this.deliveryProfileSnapshot
+    },
+    refreshDeliveryProfile() {
+      this.deliveryProfileSnapshot = resolveDeliveryProfile(getStoredUserInfo() || {})
+      return this.deliveryProfileSnapshot
     },
     buildStatusTabs() {
       if (this.isMerchantDeliveryMode()) {
@@ -348,6 +365,7 @@ export default {
       return ''
     },
     resetStatusTabs() {
+      this.refreshDeliveryProfile()
       this.statusTabs = this.buildStatusTabs()
       const validKeys = this.statusTabs.map(tab => tab.key)
       // 如果是别的页面显式带着 status 进来，并且这个状态在当前账号口径下是合法的，
@@ -357,6 +375,26 @@ export default {
       }
       if (!validKeys.includes(this.currentStatus)) {
         this.currentStatus = this.getDefaultCurrentStatus()
+      }
+    },
+    decorateOrderForCard(order = {}) {
+      const isTownOrder = this.isTownOrder(order)
+      const isTransferOrder = this.isTransferOrder(order)
+      return {
+        ...order,
+        __view: {
+          highlightCard: Number(order.status) === 1 || Number(order.status) === 4,
+          isTownOrder,
+          isTransferOrder,
+          transferTag: this.getTransferTag(order),
+          statusText: this.getStatusText(order),
+          statusColor: this.getStatusColor(order.status, order),
+          briefAddress: this.getBriefAddress(order),
+          townName: this.getTownName(order),
+          transferCardSummary: isTransferOrder ? this.getTransferCardSummary(order) : '',
+          canAcceptTownOrder: this.canAcceptTownOrder(order),
+          canStartMerchantSelfDelivery: this.canStartMerchantSelfDelivery(order)
+        }
       }
     },
 
@@ -656,11 +694,21 @@ export default {
       }
     },
     
-    switchStatus(status) {
+    async switchStatus(status) {
+      if (this.switchingStatus || (this.currentStatus === status && !this.reminderScene)) {
+        return
+      }
+      this.switchingStatus = true
       this.currentStatus = status
       this.clearReminderScene()
       this.page = 1
-      this.loadOrderList({ force: true })
+      try {
+        await this.loadOrderList({ force: true })
+      } catch (error) {
+        console.error('切换订单状态失败', error)
+      } finally {
+        this.switchingStatus = false
+      }
     },
     clearReminderScene() {
       this.reminderScene = ''
@@ -683,6 +731,7 @@ export default {
       if (!this.hasPageAccess) {
         return
       }
+      this.refreshDeliveryProfile()
       const params = {}
       if (!this.isTownStationmasterUser() && !this.useSimplifiedTabs() && this.currentStatus !== '' && this.currentStatus !== 'transfer') {
         params.status = this.currentStatus
@@ -720,17 +769,19 @@ export default {
           }
 
           this.updateStatusCounts(list)
+          let visibleList = []
           if (this.isMerchantDeliveryMode()) {
-            this.orderList = this.filterMerchantDeliveryOrders(list)
+            visibleList = this.filterMerchantDeliveryOrders(list)
           } else if (this.isTownStationmasterUser()) {
-            this.orderList = this.filterTownStationmasterOrders(list)
+            visibleList = this.filterTownStationmasterOrders(list)
           } else if (this.useSimplifiedTabs()) {
-            this.orderList = this.filterCountyOrders(list)
+            visibleList = this.filterCountyOrders(list)
           } else {
-            this.orderList = this.currentStatus === 'transfer'
+            visibleList = this.currentStatus === 'transfer'
               ? list.filter(order => this.isTransferOrder(order))
               : list
           }
+          this.orderList = visibleList.map(order => this.decorateOrderForCard(order))
 
           this.lastOrderListLoadedAt = Date.now()
           return this.orderList
@@ -1036,8 +1087,18 @@ export default {
     },
     
     goDetail(order) {
+      const orderId = String(order?.id || '')
+      if (!orderId || this.navigatingOrderId === orderId) {
+        return
+      }
+      this.navigatingOrderId = orderId
       uni.navigateTo({ 
-        url: `/pages/orders/detail?id=${order.id}` 
+        url: `/pages/orders/detail?id=${encodeURIComponent(orderId)}`,
+        complete: () => {
+          setTimeout(() => {
+            this.navigatingOrderId = ''
+          }, 500)
+        }
       })
     }
   }

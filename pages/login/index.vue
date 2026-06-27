@@ -69,7 +69,7 @@
       </view>
 
       <view class="form-item" v-if="isRegisterMode && isTownDelivery">
-        <text class="form-label">所属乡镇</text>
+        <text class="form-label">所属乡镇（含乡）</text>
         <picker
           mode="selector"
           :range="townOptions"
@@ -684,6 +684,7 @@ export default {
         }
         if (delivery_scope === 'town_delivery') {
           registerData.town_code = town_code
+          registerData.town_name = this.selectedTownLabel || ''
         }
       }
       

@@ -493,9 +493,8 @@ export default {
       })
     },
     startLocationReport() {
-      this.stopLocationReport()
-
       if (!this.canStartBackgroundJobs()) {
+        this.stopLocationReport()
         reportLocationDebug('A', 'App.vue:startLocationReport:not-ready', '位置上报未启动，会话未就绪', {
           route: getCurrentPages().slice(-1)[0]?.route || ''
         })
@@ -513,6 +512,7 @@ export default {
         navigation_reporting_active: navigationLocationReportingActive
       })
       if (!canReportDispatchLocation(storedUser)) {
+        this.stopLocationReport()
         reportLocationDebug('C', 'App.vue:startLocationReport:skip-role', '当前账号不属于定位上报角色', {
           role: storedUser.role || '',
           delivery_scope: storedUser.delivery_scope || '',
@@ -523,6 +523,7 @@ export default {
         return
       }
       if (this.shouldPauseLocationReportForNavigation(storedUser)) {
+        this.stopLocationReport()
         reportLocationDebug('A', 'App.vue:startLocationReport:paused-nav', '导航态暂停后台位置上报', {
           role: storedUser.role || '',
           delivery_scope: storedUser.delivery_scope || '',
@@ -530,6 +531,9 @@ export default {
           user_id: getUserId(storedUser)
         })
         console.log('当前处于导航态，后台位置上报让位暂停')
+        return
+      }
+      if (locationTimer) {
         return
       }
 
@@ -561,7 +565,8 @@ export default {
       if (
         this.canStartBackgroundJobs() &&
         canReportDispatchLocation(latestUser) &&
-        !this.shouldPauseLocationReportForNavigation(latestUser)
+        !this.shouldPauseLocationReportForNavigation(latestUser) &&
+        !hasFreshLocationSample(lastLocationSample, 60000)
       ) {
         this.doReportLocation()
       }
@@ -587,12 +592,14 @@ export default {
         longitude: sample.longitude
       }
       const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample)
-      console.log('位置上报请求体:', {
-        ...payload,
-        timestamp: sample.ts,
-        locationSource: sample.locationSource,
-        nearlySameAsLast
-      })
+      if (ENABLE_LOCATION_DEBUG_REPORT) {
+        console.log('位置上报请求体:', {
+          ...payload,
+          timestamp: sample.ts,
+          locationSource: sample.locationSource,
+          nearlySameAsLast
+        })
+      }
       lastLocationSample = { ...sample }
       if (this.globalData) {
         this.globalData.latestRiderLocation = { ...sample }
@@ -609,7 +616,9 @@ export default {
           longitude: payload.longitude,
           locationSource: sample.locationSource || ''
         })
-        console.log('真实位置上报接口失败:', err)
+        if (ENABLE_LOCATION_DEBUG_REPORT) {
+          console.log('真实位置上报接口失败:', err)
+        }
         return null
       })
 
@@ -634,12 +643,14 @@ export default {
           rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
           locationSource: sample.locationSource || ''
         })
-        console.log('位置上报成功，已提交到后端:', {
-          latitude: payload.latitude,
-          longitude: payload.longitude,
-          rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
-          locationSource: sample.locationSource || ''
-        })
+        if (ENABLE_LOCATION_DEBUG_REPORT) {
+          console.log('位置上报成功，已提交到后端:', {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            rider_location_updated_at: reportRes?.data?.rider_location_updated_at || '',
+            locationSource: sample.locationSource || ''
+          })
+        }
       }
       return reportRes
     },
@@ -751,17 +762,19 @@ export default {
             provider: sample?.provider || ''
           })
           const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample)
-          console.log('位置上报原始定位结果:', {
-            latitude: sample.latitude,
-            longitude: sample.longitude,
-            accuracy: sample.accuracy,
-            altitude: sample.altitude,
-            speed: sample.speed,
-            provider: sample.provider,
-            timestamp: sample.ts,
-            locationSource: sample.locationSource,
-            nearlySameAsLast
-          })
+          if (ENABLE_LOCATION_DEBUG_REPORT) {
+            console.log('位置上报原始定位结果:', {
+              latitude: sample.latitude,
+              longitude: sample.longitude,
+              accuracy: sample.accuracy,
+              altitude: sample.altitude,
+              speed: sample.speed,
+              provider: sample.provider,
+              timestamp: sample.ts,
+              locationSource: sample.locationSource,
+              nearlySameAsLast
+            })
+          }
 
           if (!Number.isFinite(sample.latitude) || !Number.isFinite(sample.longitude)) {
             console.warn('本次定位结果无效，不上报旧点')

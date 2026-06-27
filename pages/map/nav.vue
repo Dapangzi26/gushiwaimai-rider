@@ -66,6 +66,7 @@ import {
 
 const OVERVIEW_BRIDGE_STORAGE_KEY = '__rider_overview_bridge_message__'
 const OVERVIEW_HOST_PAYLOAD_STORAGE_KEY = '__rider_overview_host_payload__'
+const ENABLE_MAP_CONSOLE_DEBUG = false
 
 function safeText(value) {
   if (value === undefined || value === null) {
@@ -246,7 +247,7 @@ export default {
       }
       this.bridgePollTimer = setInterval(() => {
         this.consumeOverviewBridgeStorage()
-      }, 280)
+      }, 800)
       this.consumeOverviewBridgeStorage()
     },
     stopOverviewBridgePolling() {
@@ -421,15 +422,17 @@ export default {
     },
     applyOverviewOrderFallback(overviewOrders = [], rawOrderList = []) {
       if (Array.isArray(overviewOrders) && overviewOrders.length > 0) {
-        console.log('[map-nav] 总览订单加载完成', {
-          stage: this.stage,
-          currentOrderId: this.orderId,
-          rawOrderCount: Array.isArray(rawOrderList) ? rawOrderList.length : 0,
-          overviewOrderCount: overviewOrders.length,
-          statuses: Array.isArray(rawOrderList)
-            ? rawOrderList.map(item => Number(item?.status || 0))
-            : []
-        })
+        if (ENABLE_MAP_CONSOLE_DEBUG) {
+          console.log('[map-nav] 总览订单加载完成', {
+            stage: this.stage,
+            currentOrderId: this.orderId,
+            rawOrderCount: Array.isArray(rawOrderList) ? rawOrderList.length : 0,
+            overviewOrderCount: overviewOrders.length,
+            statuses: Array.isArray(rawOrderList)
+              ? rawOrderList.map(item => Number(item?.status || 0))
+              : []
+          })
+        }
         return overviewOrders
       }
       const fallbackOrder = this.buildCurrentOrderFallbackRecord()
@@ -929,18 +932,29 @@ export default {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  /* 骑手地图页这里不能只靠 100vh。
+     在 uni-app 的 app-plus + web-view 场景里，100vh 很容易和状态栏/原生容器高度对不上，
+     真机上就会出现“地图只缩在顶部一小块，下面整屏发白”的问题。
+     这里直接把整页固定铺满窗口，交给 web-view 绝对撑满。 */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   background: #0f172a;
-  position: relative;
+  overflow: hidden;
 }
 
 .overview-webview {
+  /* 这里不用再写 height: 100vh，直接跟着父容器四边贴满更稳。 */
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 100vh;
+  height: 100%;
 }
 
 .error-wrap {
-  min-height: 100vh;
+  position: absolute;
+  inset: 0;
   padding: 140rpx 36rpx 220rpx;
   box-sizing: border-box;
   background: #0f172a;

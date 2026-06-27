@@ -41,7 +41,7 @@ if (uni.restoreGlobal) {
       console[type].apply(console, [...args, filename]);
     }
   }
-  const BASE_URL = "http://121.43.190.218:3000";
+  const BASE_URL = "http://192.168.1.9:3000";
   const ORDER_STATUS = {
     0: { text: "待支付", color: "#FF6B35" },
     // 顾客还没付款
@@ -836,6 +836,7 @@ if (uni.restoreGlobal) {
           }
           if (delivery_scope === "town_delivery") {
             registerData.town_code = town_code;
+            registerData.town_name = this.selectedTownLabel || "";
           }
         }
         await registerRider(registerData);
@@ -974,7 +975,7 @@ if (uni.restoreGlobal) {
           key: 3,
           class: "form-item"
         }, [
-          vue.createElementVNode("text", { class: "form-label" }, "所属乡镇"),
+          vue.createElementVNode("text", { class: "form-label" }, "所属乡镇（含乡）"),
           vue.createElementVNode("picker", {
             mode: "selector",
             range: $data.townOptions,
@@ -6014,7 +6015,7 @@ if (uni.restoreGlobal) {
     return !!settings.categories[categoryKey];
   }
   const LOG_PREFIX = "[reminder-center]";
-  const ORDER_POLL_INTERVAL_FOREGROUND = 5e3;
+  const ORDER_POLL_INTERVAL_FOREGROUND = 15e3;
   const ORDER_POLL_INTERVAL_BACKGROUND = 3e4;
   const TOWN_POLL_INTERVAL_FOREGROUND = 15e3;
   const TOWN_POLL_INTERVAL_BACKGROUND = 3e4;
@@ -7119,7 +7120,9 @@ if (uni.restoreGlobal) {
         reminderEventHandler: null,
         orderRefreshHandler: null,
         townUnreadHandler: null,
-        workbenchRefreshTimer: null
+        workbenchRefreshTimer: null,
+        workbenchLoadPromise: null,
+        navigatingUrl: ""
       };
     },
     computed: {
@@ -7163,16 +7166,14 @@ if (uni.restoreGlobal) {
       }
       this.bindReminderEvents();
     },
-    async onShow() {
+    onShow() {
       var _a;
       const app = typeof getApp === "function" ? getApp() : null;
       const refreshSession = (_a = app == null ? void 0 : app.globalData) == null ? void 0 : _a.refreshRiderSession;
       if (typeof refreshSession === "function") {
-        try {
-          await refreshSession(false);
-        } catch (error) {
+        refreshSession(false).catch((error) => {
           formatAppLog("error", "at pages/index/index.vue:205", "工作台刷新骑手会话失败", error);
-        }
+        });
       }
       this.loadData();
     },
@@ -7343,13 +7344,39 @@ if (uni.restoreGlobal) {
         }
         return "当前没有分配到你的配送任务";
       },
+      navigateOnce(url2 = "") {
+        if (!url2 || this.navigatingUrl === url2) {
+          return;
+        }
+        this.navigatingUrl = url2;
+        uni.navigateTo({
+          url: url2,
+          complete: () => {
+            setTimeout(() => {
+              this.navigatingUrl = "";
+            }, 500);
+          }
+        });
+      },
       async loadData() {
-        await this.loadUserInfo();
-        await this.loadOrders();
-        await this.loadTodaySummary();
-        await this.loadErrands();
-        this.calculateQueueStats();
-        this.loadWorkbenchSecondaryData();
+        if (this.workbenchLoadPromise) {
+          return this.workbenchLoadPromise;
+        }
+        this.workbenchLoadPromise = (async () => {
+          await this.loadUserInfo();
+          await Promise.allSettled([
+            this.loadOrders(),
+            this.loadTodaySummary(),
+            this.loadErrands()
+          ]);
+          this.calculateQueueStats();
+          await this.loadWorkbenchSecondaryData();
+        })();
+        try {
+          return await this.workbenchLoadPromise;
+        } finally {
+          this.workbenchLoadPromise = null;
+        }
       },
       async loadWorkbenchSecondaryData() {
         const tasks = [];
@@ -7380,7 +7407,7 @@ if (uni.restoreGlobal) {
             this.nickname = res.data.nickname || (isMerchantDeliveryUser(res.data) ? "配送员" : "骑手");
           }
         } catch (e) {
-          formatAppLog("error", "at pages/index/index.vue:425", "加载用户信息失败", e);
+          formatAppLog("error", "at pages/index/index.vue:453", "加载用户信息失败", e);
         }
       },
       async loadOrders() {
@@ -7398,7 +7425,7 @@ if (uni.restoreGlobal) {
           }
           this.allOrders = list;
         } catch (e) {
-          formatAppLog("error", "at pages/index/index.vue:444", "加载订单失败", e);
+          formatAppLog("error", "at pages/index/index.vue:472", "加载订单失败", e);
           this.allOrders = [];
         }
       },
@@ -7416,7 +7443,7 @@ if (uni.restoreGlobal) {
           });
           this.errandOrders = res.data || [];
         } catch (e) {
-          formatAppLog("error", "at pages/index/index.vue:463", "加载跑腿订单失败", e);
+          formatAppLog("error", "at pages/index/index.vue:491", "加载跑腿订单失败", e);
           this.errandOrders = [];
         }
       },
@@ -7440,7 +7467,7 @@ if (uni.restoreGlobal) {
           }, 0);
           this.stationMessageUnread = unreadTotal;
         } catch (error) {
-          formatAppLog("error", "at pages/index/index.vue:496", "加载站长消息未读数失败", error);
+          formatAppLog("error", "at pages/index/index.vue:524", "加载站长消息未读数失败", error);
         }
       },
       async loadMerchantAuditSummary() {
@@ -7467,7 +7494,7 @@ if (uni.restoreGlobal) {
           );
           this.merchantAuditPending = Number.isFinite(total) ? total : list.length;
         } catch (error) {
-          formatAppLog("error", "at pages/index/index.vue:536", "加载商家入驻待审核数失败", error);
+          formatAppLog("error", "at pages/index/index.vue:564", "加载商家入驻待审核数失败", error);
           this.merchantAuditPending = 0;
         }
       },
@@ -7495,7 +7522,7 @@ if (uni.restoreGlobal) {
           );
           this.riderAuditPending = Number.isFinite(total) ? total : list.length;
         } catch (error) {
-          formatAppLog("error", "at pages/index/index.vue:577", "加载骑手待审核数失败", error);
+          formatAppLog("error", "at pages/index/index.vue:605", "加载骑手待审核数失败", error);
           this.riderAuditPending = 0;
         }
       },
@@ -7518,7 +7545,7 @@ if (uni.restoreGlobal) {
             summary.today_rider_income ?? summary.today_settled_income ?? summary.todayIncome ?? 0
           ) || 0).toFixed(2);
         } catch (error) {
-          formatAppLog("error", "at pages/index/index.vue:609", "加载今日订单统计失败", error);
+          formatAppLog("error", "at pages/index/index.vue:637", "加载今日订单统计失败", error);
           this.stats.todayDone = 0;
           this.stats.delivering = 0;
           this.stats.todayEarning = "0.00";
@@ -7553,7 +7580,7 @@ if (uni.restoreGlobal) {
               icon: "none"
             });
           } catch (error) {
-            formatAppLog("error", "at pages/index/index.vue:649", "切换接单状态失败", error);
+            formatAppLog("error", "at pages/index/index.vue:677", "切换接单状态失败", error);
           }
         }
       },
@@ -7577,7 +7604,7 @@ if (uni.restoreGlobal) {
             icon: "none"
           });
         } catch (error) {
-          formatAppLog("error", "at pages/index/index.vue:676", "切换休息状态失败", error);
+          formatAppLog("error", "at pages/index/index.vue:704", "切换休息状态失败", error);
         }
       },
       // 取消下班
@@ -7594,43 +7621,41 @@ if (uni.restoreGlobal) {
         }
       },
       goOrders() {
-        uni.navigateTo({ url: "/pages/orders/index" });
+        this.navigateOnce("/pages/orders/index");
       },
       goErrands() {
         if (this.isMerchantDeliveryMode) {
           return;
         }
-        uni.navigateTo({ url: "/pages/errands/index" });
+        this.navigateOnce("/pages/errands/index");
       },
       goTodayOrders() {
-        uni.navigateTo({ url: "/pages/today-orders/index" });
+        this.navigateOnce("/pages/today-orders/index");
       },
       goStationMessages() {
         if (!this.showStationMessageEntry) {
           uni.showToast({ title: "仅乡镇站长可进入", icon: "none" });
           return;
         }
-        uni.navigateTo({ url: "/pages/station-messages/index" });
+        this.navigateOnce("/pages/station-messages/index");
       },
       goMerchantAudit() {
         if (!this.showMerchantAuditEntry) {
           uni.showToast({ title: "仅乡镇站长可进入", icon: "none" });
           return;
         }
-        uni.navigateTo({ url: "/pages/merchant-audit/index" });
+        this.navigateOnce("/pages/merchant-audit/index");
       },
       goRiderAudit() {
         if (!this.showRiderAuditEntry) {
           uni.showToast({ title: "仅乡镇站长可进入", icon: "none" });
           return;
         }
-        uni.navigateTo({ url: "/pages/rider-audit/index" });
+        this.navigateOnce("/pages/rider-audit/index");
       },
       goOrderDetail(order) {
         const target = order.type === "errand" ? "errands" : "orders";
-        uni.navigateTo({
-          url: `/pages/${target}/detail?id=${order.id}`
-        });
+        this.navigateOnce(`/pages/${target}/detail?id=${encodeURIComponent(order.id)}`);
       }
     }
   };
@@ -8077,8 +8102,19 @@ if (uni.restoreGlobal) {
         orderRefreshTimer: null,
         orderListRequestPromise: null,
         orderListRequestKey: "",
-        lastOrderListLoadedAt: 0
+        lastOrderListLoadedAt: 0,
+        deliveryProfileSnapshot: null,
+        navigatingOrderId: "",
+        switchingStatus: false
       };
+    },
+    computed: {
+      deliveryProfile() {
+        return this.deliveryProfileSnapshot || resolveDeliveryProfile(getUserInfo$1() || {});
+      },
+      simplifiedTabs() {
+        return this.deliveryProfile.useSimplifiedTabs;
+      }
     },
     onLoad(options) {
       this.hasPageAccess = this.ensurePageAccess();
@@ -8177,8 +8213,14 @@ if (uni.restoreGlobal) {
         return this.getDeliveryProfile().useSimplifiedTabs;
       },
       getDeliveryProfile() {
-        const user = getUserInfo$1() || {};
-        return resolveDeliveryProfile(user);
+        if (!this.deliveryProfileSnapshot) {
+          this.deliveryProfileSnapshot = resolveDeliveryProfile(getUserInfo$1() || {});
+        }
+        return this.deliveryProfileSnapshot;
+      },
+      refreshDeliveryProfile() {
+        this.deliveryProfileSnapshot = resolveDeliveryProfile(getUserInfo$1() || {});
+        return this.deliveryProfileSnapshot;
       },
       buildStatusTabs() {
         if (this.isMerchantDeliveryMode()) {
@@ -8227,6 +8269,7 @@ if (uni.restoreGlobal) {
         return "";
       },
       resetStatusTabs() {
+        this.refreshDeliveryProfile();
         this.statusTabs = this.buildStatusTabs();
         const validKeys = this.statusTabs.map((tab) => tab.key);
         if (this.currentStatus && validKeys.includes(this.currentStatus)) {
@@ -8235,6 +8278,26 @@ if (uni.restoreGlobal) {
         if (!validKeys.includes(this.currentStatus)) {
           this.currentStatus = this.getDefaultCurrentStatus();
         }
+      },
+      decorateOrderForCard(order = {}) {
+        const isTownOrder = this.isTownOrder(order);
+        const isTransferOrder2 = this.isTransferOrder(order);
+        return {
+          ...order,
+          __view: {
+            highlightCard: Number(order.status) === 1 || Number(order.status) === 4,
+            isTownOrder,
+            isTransferOrder: isTransferOrder2,
+            transferTag: this.getTransferTag(order),
+            statusText: this.getStatusText(order),
+            statusColor: this.getStatusColor(order.status, order),
+            briefAddress: this.getBriefAddress(order),
+            townName: this.getTownName(order),
+            transferCardSummary: isTransferOrder2 ? this.getTransferCardSummary(order) : "",
+            canAcceptTownOrder: this.canAcceptTownOrder(order),
+            canStartMerchantSelfDelivery: this.canStartMerchantSelfDelivery(order)
+          }
+        };
       },
       getStatusText(orderOrStatus) {
         const status = typeof orderOrStatus === "object" && orderOrStatus !== null ? orderOrStatus.status : orderOrStatus;
@@ -8497,11 +8560,21 @@ if (uni.restoreGlobal) {
           return this.safeText(order.address);
         }
       },
-      switchStatus(status) {
+      async switchStatus(status) {
+        if (this.switchingStatus || this.currentStatus === status && !this.reminderScene) {
+          return;
+        }
+        this.switchingStatus = true;
         this.currentStatus = status;
         this.clearReminderScene();
         this.page = 1;
-        this.loadOrderList({ force: true });
+        try {
+          await this.loadOrderList({ force: true });
+        } catch (error) {
+          formatAppLog("error", "at pages/orders/index.vue:708", "切换订单状态失败", error);
+        } finally {
+          this.switchingStatus = false;
+        }
       },
       clearReminderScene() {
         this.reminderScene = "";
@@ -8519,6 +8592,7 @@ if (uni.restoreGlobal) {
         if (!this.hasPageAccess) {
           return;
         }
+        this.refreshDeliveryProfile();
         const params = {};
         if (!this.isTownStationmasterUser() && !this.useSimplifiedTabs() && this.currentStatus !== "" && this.currentStatus !== "transfer") {
           params.status = this.currentStatus;
@@ -8546,19 +8620,21 @@ if (uni.restoreGlobal) {
               });
             }
             this.updateStatusCounts(list);
+            let visibleList = [];
             if (this.isMerchantDeliveryMode()) {
-              this.orderList = this.filterMerchantDeliveryOrders(list);
+              visibleList = this.filterMerchantDeliveryOrders(list);
             } else if (this.isTownStationmasterUser()) {
-              this.orderList = this.filterTownStationmasterOrders(list);
+              visibleList = this.filterTownStationmasterOrders(list);
             } else if (this.useSimplifiedTabs()) {
-              this.orderList = this.filterCountyOrders(list);
+              visibleList = this.filterCountyOrders(list);
             } else {
-              this.orderList = this.currentStatus === "transfer" ? list.filter((order) => this.isTransferOrder(order)) : list;
+              visibleList = this.currentStatus === "transfer" ? list.filter((order) => this.isTransferOrder(order)) : list;
             }
+            this.orderList = visibleList.map((order) => this.decorateOrderForCard(order));
             this.lastOrderListLoadedAt = Date.now();
             return this.orderList;
           } catch (e) {
-            formatAppLog("error", "at pages/orders/index.vue:738", "加载订单失败", e);
+            formatAppLog("error", "at pages/orders/index.vue:789", "加载订单失败", e);
             this.orderList = [];
             throw e;
           } finally {
@@ -8696,7 +8772,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "已开始配送", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:898", "取餐失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:949", "取餐失败", e);
             }
           }
         });
@@ -8720,7 +8796,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "接单成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:921", "接单失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:972", "接单失败", e);
             } finally {
               this.acceptingOrderId = "";
             }
@@ -8747,7 +8823,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "送达成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:947", "确认送达失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:998", "确认送达失败", e);
               uni.showToast({
                 title: (e == null ? void 0 : e.message) || ((_a = e == null ? void 0 : e.data) == null ? void 0 : _a.message) || ((_c = (_b = e == null ? void 0 : e.response) == null ? void 0 : _b.data) == null ? void 0 : _c.message) || "确认送达失败",
                 icon: "none"
@@ -8775,7 +8851,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "已开始配送", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:973", "自配送开始失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:1024", "自配送开始失败", e);
               uni.showToast({
                 title: (e == null ? void 0 : e.message) || ((_a = e == null ? void 0 : e.data) == null ? void 0 : _a.message) || ((_c = (_b = e == null ? void 0 : e.response) == null ? void 0 : _b.data) == null ? void 0 : _c.message) || "开始配送失败",
                 icon: "none"
@@ -8803,7 +8879,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "送达成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:999", "自配送确认送达失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:1050", "自配送确认送达失败", e);
               uni.showToast({
                 title: (e == null ? void 0 : e.message) || ((_a = e == null ? void 0 : e.data) == null ? void 0 : _a.message) || ((_c = (_b = e == null ? void 0 : e.response) == null ? void 0 : _b.data) == null ? void 0 : _c.message) || "确认送达失败",
                 icon: "none"
@@ -8831,7 +8907,7 @@ if (uni.restoreGlobal) {
               uni.showToast({ title: "操作成功", icon: "success" });
               await this.loadOrderList();
             } catch (e) {
-              formatAppLog("error", "at pages/orders/index.vue:1026", "特殊完结失败", e);
+              formatAppLog("error", "at pages/orders/index.vue:1077", "特殊完结失败", e);
             }
           }
         });
@@ -8842,8 +8918,18 @@ if (uni.restoreGlobal) {
         }
       },
       goDetail(order) {
+        const orderId = String((order == null ? void 0 : order.id) || "");
+        if (!orderId || this.navigatingOrderId === orderId) {
+          return;
+        }
+        this.navigatingOrderId = orderId;
         uni.navigateTo({
-          url: `/pages/orders/detail?id=${order.id}`
+          url: `/pages/orders/detail?id=${encodeURIComponent(orderId)}`,
+          complete: () => {
+            setTimeout(() => {
+              this.navigatingOrderId = "";
+            }, 500);
+          }
         });
       }
     }
@@ -8851,7 +8937,7 @@ if (uni.restoreGlobal) {
   function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
     return vue.openBlock(), vue.createElementBlock("view", { class: "container" }, [
       vue.createElementVNode("view", { class: "status-tabs" }, [
-        $options.useSimplifiedTabs() ? (vue.openBlock(), vue.createElementBlock("view", {
+        $options.simplifiedTabs ? (vue.openBlock(), vue.createElementBlock("view", {
           key: 0,
           class: "tabs-scroll town-tabs-row"
         }, [
@@ -8917,7 +9003,7 @@ if (uni.restoreGlobal) {
               var _a;
               return vue.openBlock(), vue.createElementBlock("view", {
                 key: order.id,
-                class: vue.normalizeClass(["order-card", { "highlight-card": order.status === 1 || order.status === 4, "town-order-card": $options.isTownOrder(order), "transfer-order-card": $options.isTransferOrder(order) }]),
+                class: vue.normalizeClass(["order-card", { "highlight-card": order.__view.highlightCard, "town-order-card": order.__view.isTownOrder, "transfer-order-card": order.__view.isTransferOrder }]),
                 onClick: ($event) => $options.goDetail(order)
               }, [
                 vue.createElementVNode("view", { class: "order-header" }, [
@@ -8931,17 +9017,17 @@ if (uni.restoreGlobal) {
                         /* TEXT */
                       ),
                       vue.createElementVNode("view", { class: "header-tags" }, [
-                        $options.isTownOrder(order) ? (vue.openBlock(), vue.createElementBlock("view", {
+                        order.__view.isTownOrder ? (vue.openBlock(), vue.createElementBlock("view", {
                           key: 0,
                           class: "scope-tag"
                         }, "乡镇订单")) : vue.createCommentVNode("v-if", true),
-                        $options.isTransferOrder(order) ? (vue.openBlock(), vue.createElementBlock(
+                        order.__view.isTransferOrder ? (vue.openBlock(), vue.createElementBlock(
                           "view",
                           {
                             key: 1,
                             class: "transfer-tag"
                           },
-                          vue.toDisplayString($options.getTransferTag(order)),
+                          vue.toDisplayString(order.__view.transferTag),
                           1
                           /* TEXT */
                         )) : vue.createCommentVNode("v-if", true),
@@ -8949,9 +9035,9 @@ if (uni.restoreGlobal) {
                           "view",
                           {
                             class: "status-tag",
-                            style: vue.normalizeStyle({ backgroundColor: $options.getStatusColor(order.status, order) })
+                            style: vue.normalizeStyle({ backgroundColor: order.__view.statusColor })
                           },
-                          vue.toDisplayString($options.getStatusText(order)),
+                          vue.toDisplayString(order.__view.statusText),
                           5
                           /* TEXT, STYLE */
                         )
@@ -8993,7 +9079,7 @@ if (uni.restoreGlobal) {
                     }, ["stop"])
                   }, "📞 打电话", 8, ["onClick"])
                 ]),
-                $options.getBriefAddress(order) ? (vue.openBlock(), vue.createElementBlock("view", {
+                order.__view.briefAddress ? (vue.openBlock(), vue.createElementBlock("view", {
                   key: 0,
                   class: "simple-info"
                 }, [
@@ -9001,12 +9087,12 @@ if (uni.restoreGlobal) {
                   vue.createElementVNode(
                     "text",
                     { class: "info-text address-text order-main-text" },
-                    vue.toDisplayString($options.getBriefAddress(order)),
+                    vue.toDisplayString(order.__view.briefAddress),
                     1
                     /* TEXT */
                   )
                 ])) : vue.createCommentVNode("v-if", true),
-                $options.getTownName(order) ? (vue.openBlock(), vue.createElementBlock("view", {
+                order.__view.townName ? (vue.openBlock(), vue.createElementBlock("view", {
                   key: 1,
                   class: "simple-info"
                 }, [
@@ -9014,12 +9100,12 @@ if (uni.restoreGlobal) {
                   vue.createElementVNode(
                     "text",
                     { class: "info-text order-main-text" },
-                    vue.toDisplayString($options.getTownName(order)),
+                    vue.toDisplayString(order.__view.townName),
                     1
                     /* TEXT */
                   )
                 ])) : vue.createCommentVNode("v-if", true),
-                $options.isTransferOrder(order) ? (vue.openBlock(), vue.createElementBlock("view", {
+                order.__view.isTransferOrder ? (vue.openBlock(), vue.createElementBlock("view", {
                   key: 2,
                   class: "simple-info transfer-info"
                 }, [
@@ -9027,19 +9113,19 @@ if (uni.restoreGlobal) {
                   vue.createElementVNode(
                     "text",
                     { class: "info-text" },
-                    vue.toDisplayString($options.getTransferCardSummary(order)),
+                    vue.toDisplayString(order.__view.transferCardSummary),
                     1
                     /* TEXT */
                   )
                 ])) : vue.createCommentVNode("v-if", true),
                 vue.createElementVNode("view", { class: "order-actions" }, [
-                  $options.canAcceptTownOrder(order) ? (vue.openBlock(), vue.createElementBlock("button", {
+                  order.__view.canAcceptTownOrder ? (vue.openBlock(), vue.createElementBlock("button", {
                     key: 0,
                     class: "btn btn-primary",
                     disabled: $data.acceptingOrderId === String(order.id),
                     onClick: vue.withModifiers(($event) => $options.handleAcceptOrder(order), ["stop"])
                   }, vue.toDisplayString($data.acceptingOrderId === String(order.id) ? "接单中..." : "接单"), 9, ["disabled", "onClick"])) : vue.createCommentVNode("v-if", true),
-                  $options.canStartMerchantSelfDelivery(order) ? (vue.openBlock(), vue.createElementBlock("button", {
+                  order.__view.canStartMerchantSelfDelivery ? (vue.openBlock(), vue.createElementBlock("button", {
                     key: 1,
                     class: "btn btn-primary",
                     onClick: vue.withModifiers(($event) => $options.handleMerchantSelfDeliveryStart(order), ["stop"])
@@ -9930,6 +10016,7 @@ if (uni.restoreGlobal) {
     const targetId = safeText$5(orderId);
     return orderList.find((item) => safeText$5(item == null ? void 0 : item.id) === targetId) || null;
   }
+  const ENABLE_DETAIL_CONSOLE_DEBUG = false;
   function reportDetailDebug(hypothesisId, location2, msg, data = {}) {
     {
       return;
@@ -10023,7 +10110,10 @@ if (uni.restoreGlobal) {
         deliveryDistanceLoading: false,
         deliveryDistanceError: "",
         deliveryDistanceTimer: null,
-        navigationLaunching: false
+        navigationLaunching: false,
+        orderDetailRequestPromise: null,
+        orderDetailRequestId: "",
+        lastOrderDetailLoadedAt: 0
       };
     },
     onLoad(options) {
@@ -10346,36 +10436,38 @@ if (uni.restoreGlobal) {
           return this.safeText(order.address) || "未知地址";
         }
       },
-      async loadOrderDetail() {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+      async loadOrderDetail({ force = false } = {}) {
         if (!this.hasPageAccess || !this.orderId) {
           return;
         }
-        try {
-          const res = await getOrderDetail(this.orderId);
-          this.order = res.data || {};
-          this.syncOrderOwnershipState(this.order, false);
-          await this.refreshConfirmDeliveryDistance({
-            forceLocate: true,
-            silent: true
-          });
-          this.syncDeliveryDistancePolling();
-          formatAppLog("log", "at pages/orders/detail.vue:784", "[order-detail] loadOrderDetail success", {
-            orderId: ((_a = this.order) == null ? void 0 : _a.id) ?? "",
-            orderNo: ((_b = this.order) == null ? void 0 : _b.order_no) ?? "",
-            status: ((_c = this.order) == null ? void 0 : _c.status) ?? "",
-            hasOrderOwnership: this.hasOrderOwnership
-          });
-          formatAppLog("log", "at pages/orders/detail.vue:790", "[order-detail] debug transfer fields", {
-            order_type: (_d = this.order) == null ? void 0 : _d.order_type,
-            status: (_e = this.order) == null ? void 0 : _e.status,
-            rider_id: (_f = this.order) == null ? void 0 : _f.rider_id,
-            current_responsible_user_id: (_g = this.order) == null ? void 0 : _g.current_responsible_user_id,
-            can_transfer: (_h = this.order) == null ? void 0 : _h.can_transfer
-          });
-        } catch (e) {
-          formatAppLog("error", "at pages/orders/detail.vue:798", "加载订单详情失败", e);
+        const requestId = String(this.orderId);
+        if (this.orderDetailRequestPromise && this.orderDetailRequestId === requestId) {
+          return this.orderDetailRequestPromise;
         }
+        if (!force && this.orderDetailRequestId === requestId && Date.now() - this.lastOrderDetailLoadedAt < 1200) {
+          return this.order;
+        }
+        this.orderDetailRequestId = requestId;
+        this.orderDetailRequestPromise = (async () => {
+          try {
+            const res = await getOrderDetail(this.orderId);
+            this.order = res.data || {};
+            this.lastOrderDetailLoadedAt = Date.now();
+            this.syncOrderOwnershipState(this.order, false);
+            await this.refreshConfirmDeliveryDistance({
+              forceLocate: true,
+              silent: true
+            });
+            this.syncDeliveryDistancePolling();
+            if (ENABLE_DETAIL_CONSOLE_DEBUG)
+              ;
+          } catch (e) {
+            formatAppLog("error", "at pages/orders/detail.vue:814", "加载订单详情失败", e);
+          } finally {
+            this.orderDetailRequestPromise = null;
+          }
+        })();
+        return this.orderDetailRequestPromise;
       },
       async loadTownOptions() {
         try {
@@ -10386,7 +10478,7 @@ if (uni.restoreGlobal) {
           })) : [];
         } catch (error) {
           this.townOptions = [];
-          formatAppLog("error", "at pages/orders/detail.vue:812", "加载转派乡镇列表失败", error);
+          formatAppLog("error", "at pages/orders/detail.vue:832", "加载转派乡镇列表失败", error);
         }
       },
       normalizeStationmasterOptions(source) {
@@ -10412,7 +10504,7 @@ if (uni.restoreGlobal) {
           this.stationmasterOptions = this.normalizeStationmasterOptions(res == null ? void 0 : res.data);
         } catch (error) {
           this.stationmasterOptions = [];
-          formatAppLog("error", "at pages/orders/detail.vue:851", "加载转派站长列表失败", error);
+          formatAppLog("error", "at pages/orders/detail.vue:871", "加载转派站长列表失败", error);
         } finally {
           this.stationmastersLoading = false;
         }
@@ -10440,7 +10532,7 @@ if (uni.restoreGlobal) {
           this.townRiderOptions = this.normalizeTownRiderOptions(res == null ? void 0 : res.data);
         } catch (error) {
           this.townRiderOptions = [];
-          formatAppLog("error", "at pages/orders/detail.vue:886", "加载乡镇骑手列表失败", error);
+          formatAppLog("error", "at pages/orders/detail.vue:906", "加载乡镇骑手列表失败", error);
           uni.showToast({ title: this.getErrorMessage(error) || "加载骑手列表失败", icon: "none" });
         } finally {
           this.townRiderListLoading = false;
@@ -10496,7 +10588,7 @@ if (uni.restoreGlobal) {
                 target_user_id: payload.target_user_id || ""
               });
               uni.showToast({ title: "转派成功", icon: "success" });
-              await this.loadOrderDetail();
+              await this.loadOrderDetail({ force: true });
               this.refreshOrderListPage();
             } finally {
               this.transferSubmitting = false;
@@ -10523,10 +10615,10 @@ if (uni.restoreGlobal) {
                 remark: payload.remark || "站长转交本乡镇骑手配送"
               });
               uni.showToast({ title: "转单成功", icon: "success" });
-              await this.loadOrderDetail();
+              await this.loadOrderDetail({ force: true });
               this.refreshOrderListPage();
             } catch (error) {
-              formatAppLog("error", "at pages/orders/detail.vue:972", "转给骑手失败", error);
+              formatAppLog("error", "at pages/orders/detail.vue:992", "转给骑手失败", error);
               uni.showToast({ title: this.getErrorMessage(error) || "转单失败", icon: "none" });
             } finally {
               this.townRiderTransferSubmitting = false;
@@ -10548,7 +10640,7 @@ if (uni.restoreGlobal) {
             }
             await revokeOrderTransfer(this.getTransferOrderIdentifier());
             uni.showToast({ title: isStationmasterReject ? "已退回县城" : "已撤回转派", icon: "success" });
-            await this.loadOrderDetail();
+            await this.loadOrderDetail({ force: true });
             this.refreshOrderListPage();
           }
         });
@@ -10641,9 +10733,9 @@ if (uni.restoreGlobal) {
               try {
                 await confirmDelivery(this.orderId);
                 uni.showToast({ title: "送达成功", icon: "success" });
-                await this.loadOrderDetail();
+                await this.loadOrderDetail({ force: true });
               } catch (e) {
-                formatAppLog("error", "at pages/orders/detail.vue:1094", "确认送达失败", e);
+                formatAppLog("error", "at pages/orders/detail.vue:1114", "确认送达失败", e);
               }
             }
           });
@@ -10669,9 +10761,9 @@ if (uni.restoreGlobal) {
               try {
                 await startMerchantSelfDelivery(this.orderId);
                 uni.showToast({ title: "已开始配送", icon: "success" });
-                await this.loadOrderDetail();
+                await this.loadOrderDetail({ force: true });
               } catch (e) {
-                formatAppLog("error", "at pages/orders/detail.vue:1121", "自配送开始失败", e);
+                formatAppLog("error", "at pages/orders/detail.vue:1141", "自配送开始失败", e);
                 uni.showToast({ title: this.getErrorMessage(e) || "开始配送失败", icon: "none" });
               }
             }
@@ -10694,9 +10786,9 @@ if (uni.restoreGlobal) {
                 try {
                   await confirmMerchantSelfDelivery(this.orderId);
                   uni.showToast({ title: "送达成功", icon: "success" });
-                  await this.loadOrderDetail();
+                  await this.loadOrderDetail({ force: true });
                 } catch (e) {
-                  formatAppLog("error", "at pages/orders/detail.vue:1145", "自配送确认送达失败", e);
+                  formatAppLog("error", "at pages/orders/detail.vue:1165", "自配送确认送达失败", e);
                   uni.showToast({ title: this.getErrorMessage(e) || "确认送达失败", icon: "none" });
                 }
               }
@@ -10732,9 +10824,9 @@ if (uni.restoreGlobal) {
             try {
               await confirmDeliverySpecial(this.orderId);
               uni.showToast({ title: "操作成功", icon: "success" });
-              await this.loadOrderDetail();
+              await this.loadOrderDetail({ force: true });
             } catch (e) {
-              formatAppLog("error", "at pages/orders/detail.vue:1182", "特殊完结失败", e);
+              formatAppLog("error", "at pages/orders/detail.vue:1202", "特殊完结失败", e);
             }
           }
         });
@@ -10854,7 +10946,7 @@ if (uni.restoreGlobal) {
           missingTargets.push(stage === "delivery" ? "用户" : "商家");
         }
         if (missingTargets.length) {
-          formatAppLog("warn", "at pages/orders/detail.vue:1314", "[order-detail] navigation coords missing", {
+          formatAppLog("warn", "at pages/orders/detail.vue:1334", "[order-detail] navigation coords missing", {
             stage,
             missingTargets,
             merchantLng: (payload == null ? void 0 : payload.merchantLng) || "",
@@ -11033,15 +11125,9 @@ ${coordText}` : searchText;
         });
       },
       async handlePickup() {
-        var _a, _b;
         if (!this.ensureOrderOwnership("取餐")) {
           return;
         }
-        formatAppLog("log", "at pages/orders/detail.vue:1517", "[order-detail] handlePickup before confirm", {
-          requestOrderId: this.orderId,
-          orderStatus: ((_a = this.order) == null ? void 0 : _a.status) ?? "",
-          canPickup: this.canPickup((_b = this.order) == null ? void 0 : _b.status)
-        });
         if (!this.canPickup(this.order.status)) {
           uni.showToast({ title: "当前订单不可取餐", icon: "none" });
           return;
@@ -11052,7 +11138,7 @@ ${coordText}` : searchText;
           confirmText: "开始配送",
           cancelText: "取消",
           success: async (res) => {
-            var _a2;
+            var _a;
             if (!res.confirm)
               return;
             if (!this.ensureOrderOwnership("取餐")) {
@@ -11061,14 +11147,14 @@ ${coordText}` : searchText;
             try {
               await riderPickup(this.orderId);
               uni.showToast({ title: "已开始配送", icon: "success" });
-              await this.loadOrderDetail();
+              await this.loadOrderDetail({ force: true });
             } catch (e) {
-              formatAppLog("error", "at pages/orders/detail.vue:1541", "[order-detail] riderPickup failed", {
+              formatAppLog("error", "at pages/orders/detail.vue:1563", "[order-detail] riderPickup failed", {
                 httpStatus: this.getErrorStatusCode(e),
                 message: this.getErrorMessage(e),
-                data: (e == null ? void 0 : e.data) ?? ((_a2 = e == null ? void 0 : e.response) == null ? void 0 : _a2.data) ?? null
+                data: (e == null ? void 0 : e.data) ?? ((_a = e == null ? void 0 : e.response) == null ? void 0 : _a.data) ?? null
               });
-              formatAppLog("error", "at pages/orders/detail.vue:1546", "取餐失败", e);
+              formatAppLog("error", "at pages/orders/detail.vue:1568", "取餐失败", e);
             }
           }
         });
@@ -11392,7 +11478,7 @@ ${coordText}` : searchText;
     ]);
   }
   const PagesOrdersDetail = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$c], ["__scopeId", "data-v-bc4602bd"], ["__file", "E:/固始县外卖骑手端/pages/orders/detail.vue"]]);
-  const TENCENT_MAP_WEB_KEY = "V73BZ-NI3LQ-OYZ5D-BYCOD-D6RQH-KGBEU";
+  const TENCENT_MAP_WEB_KEY = "MHUBZ-Y4TYG-PPVQD-QKGYW-YHM3E-DNBX4";
   const OVERVIEW_BRIDGE_STORAGE_KEY = "__rider_overview_bridge_message__";
   const OVERVIEW_HOST_PAYLOAD_STORAGE_KEY = "__rider_overview_host_payload__";
   function safeText$4(value2) {
@@ -11552,7 +11638,7 @@ ${coordText}` : searchText;
         }
         this.bridgePollTimer = setInterval(() => {
           this.consumeOverviewBridgeStorage();
-        }, 280);
+        }, 800);
         this.consumeOverviewBridgeStorage();
       },
       stopOverviewBridgePolling() {
@@ -11659,7 +11745,7 @@ ${coordText}` : searchText;
           this.syncSelectionAfterLoad();
           this.updateStatusText();
         } catch (error) {
-          formatAppLog("error", "at pages/map/nav.vue:370", "加载骑手地图总览订单失败", error);
+          formatAppLog("error", "at pages/map/nav.vue:371", "加载骑手地图总览订单失败", error);
           this.overviewOrders = this.applyOverviewOrderFallback([], []);
           this.syncSelectionAfterLoad();
           this.updateStatusText((error == null ? void 0 : error.message) || "活跃订单加载失败");
@@ -11687,7 +11773,7 @@ ${coordText}` : searchText;
         }
         const targetCoords = this.stage === "delivery" ? { lng: fallbackOrder.customerLng, lat: fallbackOrder.customerLat } : { lng: fallbackOrder.merchantLng, lat: fallbackOrder.merchantLat };
         if (!hasValidCoords$1(targetCoords)) {
-          formatAppLog("warn", "at pages/map/nav.vue:408", "[map-nav] 当前单兜底失败：入口坐标无效", {
+          formatAppLog("warn", "at pages/map/nav.vue:409", "[map-nav] 当前单兜底失败：入口坐标无效", {
             stage: this.stage,
             orderId: fallbackOrder.id,
             orderNo: fallbackOrder.orderNo,
@@ -11703,18 +11789,11 @@ ${coordText}` : searchText;
       },
       applyOverviewOrderFallback(overviewOrders = [], rawOrderList = []) {
         if (Array.isArray(overviewOrders) && overviewOrders.length > 0) {
-          formatAppLog("log", "at pages/map/nav.vue:424", "[map-nav] 总览订单加载完成", {
-            stage: this.stage,
-            currentOrderId: this.orderId,
-            rawOrderCount: Array.isArray(rawOrderList) ? rawOrderList.length : 0,
-            overviewOrderCount: overviewOrders.length,
-            statuses: Array.isArray(rawOrderList) ? rawOrderList.map((item) => Number((item == null ? void 0 : item.status) || 0)) : []
-          });
           return overviewOrders;
         }
         const fallbackOrder = this.buildCurrentOrderFallbackRecord();
         if (!fallbackOrder) {
-          formatAppLog("warn", "at pages/map/nav.vue:437", "[map-nav] 总览订单为空，且当前单无法兜底", {
+          formatAppLog("warn", "at pages/map/nav.vue:440", "[map-nav] 总览订单为空，且当前单无法兜底", {
             stage: this.stage,
             currentOrderId: this.orderId,
             currentOrderNo: this.orderNo,
@@ -11723,7 +11802,7 @@ ${coordText}` : searchText;
           });
           return [];
         }
-        formatAppLog("warn", "at pages/map/nav.vue:448", "[map-nav] 总览订单为空，已回退到当前单兜底显示", {
+        formatAppLog("warn", "at pages/map/nav.vue:451", "[map-nav] 总览订单为空，已回退到当前单兜底显示", {
           stage: this.stage,
           currentOrderId: fallbackOrder.id,
           currentOrderNo: fallbackOrder.orderNo,
@@ -11953,7 +12032,7 @@ ${coordText}` : searchText;
             icon: "success"
           });
         } catch (error) {
-          formatAppLog("error", "at pages/map/nav.vue:711", "总览页确认送达失败", error);
+          formatAppLog("error", "at pages/map/nav.vue:714", "总览页确认送达失败", error);
           uni.showToast({
             title: (error == null ? void 0 : error.message) || "确认送达失败",
             icon: "none"
@@ -12100,7 +12179,7 @@ ${coordText}` : searchText;
             }
             return;
           }
-          formatAppLog("error", "at pages/map/nav.vue:876", "腾讯原生导航返回失败结果", result);
+          formatAppLog("error", "at pages/map/nav.vue:879", "腾讯原生导航返回失败结果", result);
           uni.showToast({
             title: (result == null ? void 0 : result.message) || "打开腾讯导航失败",
             icon: "none"
@@ -15312,6 +15391,7 @@ ${coordText}` : searchText;
   let validatedSessionToken = "";
   let validatedSessionUserId = "";
   let validatedSessionUser = null;
+  const ENABLE_LOCATION_DEBUG_REPORT = false;
   const LOCATION_REPORT_INTERVAL_MS = 2e4;
   const LOCATION_HIGH_ACCURACY_REFRESH_MS = 6e4;
   const LOCATION_TIMEOUT_LOG_INTERVAL_MS = 6e4;
@@ -15711,12 +15791,12 @@ ${coordText}` : searchText;
       },
       startLocationReport() {
         var _a;
-        this.stopLocationReport();
         if (!this.canStartBackgroundJobs()) {
+          this.stopLocationReport();
           reportLocationDebug("A", "App.vue:startLocationReport:not-ready", "位置上报未启动，会话未就绪", {
             route: ((_a = getCurrentPages().slice(-1)[0]) == null ? void 0 : _a.route) || ""
           });
-          formatAppLog("log", "at App.vue:502", "会话未就绪，不启动位置上报");
+          formatAppLog("log", "at App.vue:501", "会话未就绪，不启动位置上报");
           return;
         }
         const storedUser = getUserInfo$1() || {};
@@ -15729,6 +15809,7 @@ ${coordText}` : searchText;
           navigation_reporting_active: navigationLocationReportingActive
         });
         if (!canReportDispatchLocation(storedUser)) {
+          this.stopLocationReport();
           reportLocationDebug("C", "App.vue:startLocationReport:skip-role", "当前账号不属于定位上报角色", {
             role: storedUser.role || "",
             delivery_scope: storedUser.delivery_scope || "",
@@ -15739,13 +15820,17 @@ ${coordText}` : searchText;
           return;
         }
         if (this.shouldPauseLocationReportForNavigation(storedUser)) {
+          this.stopLocationReport();
           reportLocationDebug("A", "App.vue:startLocationReport:paused-nav", "导航态暂停后台位置上报", {
             role: storedUser.role || "",
             delivery_scope: storedUser.delivery_scope || "",
             rider_kind: storedUser.rider_kind || "",
             user_id: getUserId(storedUser)
           });
-          formatAppLog("log", "at App.vue:532", "当前处于导航态，后台位置上报让位暂停");
+          formatAppLog("log", "at App.vue:533", "当前处于导航态，后台位置上报让位暂停");
+          return;
+        }
+        if (locationTimer) {
           return;
         }
         reportLocationDebug("A", "App.vue:startLocationReport:started", "位置上报定时器已启动", {
@@ -15755,7 +15840,7 @@ ${coordText}` : searchText;
           rider_kind: storedUser.rider_kind || "",
           user_id: getUserId(storedUser)
         });
-        formatAppLog("log", "at App.vue:543", "启动位置上报定时器，间隔 " + LOCATION_REPORT_INTERVAL_MS / 1e3 + " 秒");
+        formatAppLog("log", "at App.vue:547", "启动位置上报定时器，间隔 " + LOCATION_REPORT_INTERVAL_MS / 1e3 + " 秒");
         locationTimer = setInterval(() => {
           const latestUser2 = getUserInfo$1() || {};
           if (!this.canStartBackgroundJobs() || !canReportDispatchLocation(latestUser2) || this.shouldPauseLocationReportForNavigation(latestUser2)) {
@@ -15765,7 +15850,7 @@ ${coordText}` : searchText;
           this.doReportLocation();
         }, LOCATION_REPORT_INTERVAL_MS);
         const latestUser = getUserInfo$1() || {};
-        if (this.canStartBackgroundJobs() && canReportDispatchLocation(latestUser) && !this.shouldPauseLocationReportForNavigation(latestUser)) {
+        if (this.canStartBackgroundJobs() && canReportDispatchLocation(latestUser) && !this.shouldPauseLocationReportForNavigation(latestUser) && !hasFreshLocationSample(lastLocationSample, 6e4)) {
           this.doReportLocation();
         }
       },
@@ -15773,12 +15858,12 @@ ${coordText}` : searchText;
         if (locationTimer) {
           clearInterval(locationTimer);
           locationTimer = null;
-          formatAppLog("log", "at App.vue:577", "位置上报定时器已停止");
+          formatAppLog("log", "at App.vue:582", "位置上报定时器已停止");
         }
         locationReportInFlight = false;
       },
       async reportLocationSample(sample = null) {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d;
         if (!sample || !Number.isFinite(sample.latitude) || !Number.isFinite(sample.longitude)) {
           return null;
         }
@@ -15786,13 +15871,7 @@ ${coordText}` : searchText;
           latitude: sample.latitude,
           longitude: sample.longitude
         };
-        const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample);
-        formatAppLog("log", "at App.vue:590", "位置上报请求体:", {
-          ...payload,
-          timestamp: sample.ts,
-          locationSource: sample.locationSource,
-          nearlySameAsLast
-        });
+        !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample);
         lastLocationSample = { ...sample };
         if (this.globalData) {
           this.globalData.latestRiderLocation = { ...sample };
@@ -15809,7 +15888,6 @@ ${coordText}` : searchText;
             longitude: payload.longitude,
             locationSource: sample.locationSource || ""
           });
-          formatAppLog("log", "at App.vue:612", "真实位置上报接口失败:", err);
           return null;
         });
         if ((_a = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _a.throttled) {
@@ -15819,7 +15897,7 @@ ${coordText}` : searchText;
             rider_location_updated_at: ((_b = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _b.rider_location_updated_at) || "",
             locationSource: sample.locationSource || ""
           });
-          formatAppLog("warn", "at App.vue:623", "位置已获取，但后端本次限频忽略写入:", {
+          formatAppLog("warn", "at App.vue:632", "位置已获取，但后端本次限频忽略写入:", {
             latitude: payload.latitude,
             longitude: payload.longitude,
             rider_location_updated_at: ((_c = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _c.rider_location_updated_at) || "",
@@ -15831,12 +15909,6 @@ ${coordText}` : searchText;
             latitude: payload.latitude,
             longitude: payload.longitude,
             rider_location_updated_at: ((_d = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _d.rider_location_updated_at) || "",
-            locationSource: sample.locationSource || ""
-          });
-          formatAppLog("log", "at App.vue:637", "位置上报成功，已提交到后端:", {
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-            rider_location_updated_at: ((_e = reportRes == null ? void 0 : reportRes.data) == null ? void 0 : _e.rider_location_updated_at) || "",
             locationSource: sample.locationSource || ""
           });
         }
@@ -15880,7 +15952,7 @@ ${coordText}` : searchText;
                   errMsg: String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || "")
                 });
                 if (buildLocationFailureMeta(error).type !== "timeout" || shouldLogLocationTimeout()) {
-                  formatAppLog("warn", "at App.vue:692", "wgs84 普通精度定位失败，准备尝试高精度定位:", error);
+                  formatAppLog("warn", "at App.vue:703", "wgs84 普通精度定位失败，准备尝试高精度定位:", error);
                 }
               }
             }
@@ -15899,9 +15971,9 @@ ${coordText}` : searchText;
                 });
                 if (isGcj02NotSupportedError(error)) {
                   gcj02Unsupported = true;
-                  formatAppLog("warn", "at App.vue:711", "当前环境不支持 gcj02，后续改用 wgs84 定位并本地转换为 gcj02 上报");
+                  formatAppLog("warn", "at App.vue:722", "当前环境不支持 gcj02，后续改用 wgs84 定位并本地转换为 gcj02 上报");
                 } else if (buildLocationFailureMeta(error).type !== "timeout" || shouldLogLocationTimeout()) {
-                  formatAppLog("warn", "at App.vue:713", "gcj02 高精度定位失败，准备改用 wgs84 高精度兜底:", error);
+                  formatAppLog("warn", "at App.vue:724", "gcj02 高精度定位失败，准备改用 wgs84 高精度兜底:", error);
                 }
               }
             }
@@ -15918,7 +15990,7 @@ ${coordText}` : searchText;
                   errMsg: String((error == null ? void 0 : error.errMsg) || (error == null ? void 0 : error.message) || "")
                 });
                 if (buildLocationFailureMeta(error).type !== "timeout" || shouldLogLocationTimeout()) {
-                  formatAppLog("warn", "at App.vue:730", "wgs84 高精度定位失败，继续走最近定位兜底:", error);
+                  formatAppLog("warn", "at App.vue:741", "wgs84 高精度定位失败，继续走最近定位兜底:", error);
                 }
               }
             }
@@ -15942,19 +16014,10 @@ ${coordText}` : searchText;
               provider: (sample == null ? void 0 : sample.provider) || ""
             });
             const nearlySameAsLast = !!lastLocationSample && isNearlySameLocation(sample, lastLocationSample);
-            formatAppLog("log", "at App.vue:754", "位置上报原始定位结果:", {
-              latitude: sample.latitude,
-              longitude: sample.longitude,
-              accuracy: sample.accuracy,
-              altitude: sample.altitude,
-              speed: sample.speed,
-              provider: sample.provider,
-              timestamp: sample.ts,
-              locationSource: sample.locationSource,
-              nearlySameAsLast
-            });
+            if (ENABLE_LOCATION_DEBUG_REPORT)
+              ;
             if (!Number.isFinite(sample.latitude) || !Number.isFinite(sample.longitude)) {
-              formatAppLog("warn", "at App.vue:767", "本次定位结果无效，不上报旧点");
+              formatAppLog("warn", "at App.vue:780", "本次定位结果无效，不上报旧点");
               return;
             }
             await this.reportLocationSample(sample);
@@ -15972,7 +16035,7 @@ ${coordText}` : searchText;
                 ts: Date.now(),
                 locationSource: `${lastLocationSample.locationSource || "cached"}_timeout_fallback`
               };
-              formatAppLog("warn", "at App.vue:788", "本次实时定位超时，已改为复用最近一次有效定位静默上报:", {
+              formatAppLog("warn", "at App.vue:801", "本次实时定位超时，已改为复用最近一次有效定位静默上报:", {
                 latitude: fallbackSample.latitude,
                 longitude: fallbackSample.longitude,
                 locationSource: fallbackSample.locationSource
@@ -15980,7 +16043,7 @@ ${coordText}` : searchText;
               await this.reportLocationSample(fallbackSample);
               return;
             }
-            formatAppLog("warn", "at App.vue:796", `[定位上报失败] ${failureMeta.text}: ${failureMeta.detail}`, err);
+            formatAppLog("warn", "at App.vue:809", `[定位上报失败] ${failureMeta.text}: ${failureMeta.detail}`, err);
             if (Date.now() >= locationHintToastUntil && (failureMeta.type === "permission" || failureMeta.type === "service_disabled")) {
               locationHintToastUntil = Date.now() + 12e3;
               uni.showToast({
@@ -16057,9 +16120,9 @@ ${coordText}` : searchText;
             suppressAuthToast: true,
             suppressErrorToast: true
           });
-          formatAppLog("log", "at App.vue:886", "县城司机在线状态已同步到后端:", nextStatus);
+          formatAppLog("log", "at App.vue:899", "县城司机在线状态已同步到后端:", nextStatus);
         } catch (error) {
-          formatAppLog("error", "at App.vue:888", "县城司机在线状态同步失败:", error);
+          formatAppLog("error", "at App.vue:901", "县城司机在线状态同步失败:", error);
         }
       }
     }
